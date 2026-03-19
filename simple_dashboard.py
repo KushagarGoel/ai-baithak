@@ -258,7 +258,7 @@ with st.sidebar:
         placeholder="What should the council discuss?",
         height=100,
     )
-    max_time = st.slider("Max Duration (minutes)", 1, 30, 5)
+    max_time = st.slider("Max Duration (minutes)", 1, 600, 5)
 
     st.divider()
 
