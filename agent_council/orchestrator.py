@@ -329,7 +329,7 @@ If no particularly important insights, return {{"insights": []}}"""
                     "model": model,
                     "messages": [{"role": "user", "content": insights_prompt}],
                     "temperature": 0.3,
-                    "max_tokens": 500,
+                    "max_tokens": 1500,  # Increased to support insights >512 words
                 }
                 if self.config.litellm_proxy:
                     insights_kwargs["api_base"] = self.config.litellm_proxy.api_base
@@ -348,9 +348,8 @@ If no particularly important insights, return {{"insights": []}}"""
 
                     # Write to file
                     if insights:
-                        insights_file = os.path.join(
-                            self.config.workspace_path, "key_insights.md"
-                        )
+                        session_folder = self._get_session_folder()
+                        insights_file = os.path.join(session_folder, "key_insights.md")
                         timestamp = datetime.now().strftime("%H:%M:%S")
 
                         with open(insights_file, "a", encoding="utf-8") as f:
@@ -362,20 +361,34 @@ If no particularly important insights, return {{"insights": []}}"""
                             f.write("\n---\n")
 
                         print(
-                            f"[ORCHESTRATOR] Saved {len(insights)} insights to key_insights.md"
+                            f"[ORCHESTRATOR] Saved {len(insights)} insights to {insights_file}"
                         )
 
                         # Notify agents about the file
                         for agent in self.agents:
                             agent.add_message(
                                 "user",
-                                f"[Orchestrator has saved key insights to key_insights.md - agents can read this file for important context]",
+                                f"[Orchestrator has saved key insights to {insights_file} - agents can read this file for important context]",
                             )
             except Exception as e:
                 print(f"[ORCHESTRATOR] Failed to save insights: {e}")
 
         except Exception as e:
             print(f"Orchestrator error: {e}")
+
+    def _get_session_folder(self) -> str:
+        """Get or create the session folder for storing files."""
+        if self.config.session_id:
+            folder_name = self.config.session_id
+        else:
+            folder_name = datetime.now().strftime("%Y%m%d_%H%M%S")
+            self.config.session_id = folder_name
+
+        # Store all sessions under a 'chats' folder
+        base_folder = os.path.join(self.config.workspace_path, "chats")
+        session_folder = os.path.join(base_folder, folder_name)
+        os.makedirs(session_folder, exist_ok=True)
+        return session_folder
 
     async def _extract_and_save_insights(self, turn: DiscussionTurn):
         """Extract and save important insights from a single turn."""
@@ -431,9 +444,8 @@ If no particularly important insights, return {{"insights": []}}"""
 
                 # Write to file
                 if insights:
-                    insights_file = os.path.join(
-                        self.config.workspace_path, "key_insights.md"
-                    )
+                    session_folder = self._get_session_folder()
+                    insights_file = os.path.join(session_folder, "key_insights.md")
                     timestamp = datetime.now().strftime("%H:%M:%S")
 
                     with open(insights_file, "a", encoding="utf-8") as f:
@@ -572,15 +584,14 @@ Be objective and thorough."""
         )
 
     def _save_transcript(self):
-        """Save the discussion transcript to a file in the transcripts folder."""
-        # Ensure transcripts directory exists
-        transcripts_dir = os.path.join(self.config.workspace_path, "transcripts")
-        os.makedirs(transcripts_dir, exist_ok=True)
+        """Save the discussion transcript to a file in the session folder."""
+        # Get or create session folder
+        session_folder = self._get_session_folder()
 
         if not self.config.transcript_path:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = os.path.join(
-                transcripts_dir, f"council_transcript_{timestamp}.json"
+                session_folder, f"council_transcript_{timestamp}.json"
             )
         else:
             # If a custom path is provided, use it as-is (user can specify full path)

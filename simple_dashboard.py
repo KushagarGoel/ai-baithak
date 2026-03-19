@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+import pickle
 import time
 from datetime import datetime
 
@@ -19,7 +20,8 @@ st.set_page_config(
 )
 
 # Custom CSS - Dark mode compatible
-st.markdown("""
+st.markdown(
+    """
 <style>
 .agent-card {
     padding: 1rem;
@@ -53,7 +55,9 @@ st.markdown("""
     line-height: 1.6;
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 
 def get_persona_class(persona_key: str) -> str:
@@ -86,7 +90,7 @@ def render_message(turn, container=None):
             {turn.agent_name}
             <span class="persona-tag">{turn.persona}</span>
         </div>
-        <div class="message-content">{turn.content.replace(chr(10), '<br>')}</div>
+        <div class="message-content">{turn.content.replace(chr(10), "<br>")}</div>
     </div>
     """
 
@@ -103,6 +107,92 @@ if "turns" not in st.session_state:
     st.session_state.turns = []
 if "summary" not in st.session_state:
     st.session_state.summary = None
+if "config" not in st.session_state:
+    st.session_state.config = None
+if "session_id" not in st.session_state:
+    st.session_state.session_id = None
+if "turn_in_progress" not in st.session_state:
+    st.session_state.turn_in_progress = False
+if "pending_user_message" not in st.session_state:
+    st.session_state.pending_user_message = None
+if "trigger_next_turn" not in st.session_state:
+    st.session_state.trigger_next_turn = False
+
+
+def save_session_state():
+    """Save current session to disk."""
+    sessions_dir = os.path.join(os.getcwd(), "sessions")
+    os.makedirs(sessions_dir, exist_ok=True)
+
+    # Generate session ID if not exists
+    if not st.session_state.session_id:
+        st.session_state.session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    session_file = os.path.join(
+        sessions_dir, f"session_{st.session_state.session_id}.pkl"
+    )
+
+    # Save session data
+    session_data = {
+        "session_id": st.session_state.session_id,
+        "turns": st.session_state.turns,
+        "config": st.session_state.config,
+        "summary": st.session_state.summary,
+        "running": st.session_state.running,
+    }
+
+    with open(session_file, "wb") as f:
+        pickle.dump(session_data, f)
+
+    return session_file
+
+
+def load_session_state(session_file: str):
+    """Load session from disk."""
+    with open(session_file, "rb") as f:
+        session_data = pickle.load(f)
+
+    st.session_state.session_id = session_data["session_id"]
+    st.session_state.turns = session_data["turns"]
+    st.session_state.config = session_data["config"]
+    st.session_state.summary = session_data["summary"]
+    st.session_state.running = session_data.get("running", False)
+
+    return session_data
+
+
+def get_saved_sessions():
+    """Get list of saved sessions."""
+    sessions_dir = os.path.join(os.getcwd(), "sessions")
+    if not os.path.exists(sessions_dir):
+        return []
+
+    sessions = []
+    for filename in sorted(os.listdir(sessions_dir), reverse=True):
+        if filename.startswith("session_") and filename.endswith(".pkl"):
+            filepath = os.path.join(sessions_dir, filename)
+            try:
+                with open(filepath, "rb") as f:
+                    session_data = pickle.load(f)
+                sessions.append(
+                    {
+                        "file": filepath,
+                        "id": session_data.get("session_id", filename),
+                        "topic": session_data.get("config", {}).topic
+                        if session_data.get("config")
+                        else "Unknown",
+                        "turns": len(session_data.get("turns", [])),
+                        "date": datetime.strptime(
+                            session_data.get("session_id", "19700101_000000"),
+                            "%Y%m%d_%H%M%S",
+                        )
+                        if session_data.get("session_id")
+                        else datetime.now(),
+                    }
+                )
+            except:
+                pass
+    return sessions
 
 
 # Header
@@ -112,6 +202,39 @@ st.markdown("Configure your council and let them deliberate")
 
 # Sidebar - Configuration
 with st.sidebar:
+    st.header("Session Management")
+
+    # Load saved sessions
+    saved_sessions = get_saved_sessions()
+    if saved_sessions:
+        st.subheader("💾 Continue Previous Session")
+        session_options = {
+            f"{s['topic'][:40]}... ({s['turns']} turns) - {s['date'].strftime('%Y-%m-%d %H:%M')}": s
+            for s in saved_sessions
+        }
+        selected_session_label = st.selectbox(
+            "Select session to continue",
+            options=["New Session"] + list(session_options.keys()),
+            index=0,
+        )
+
+        if selected_session_label != "New Session" and st.button("🔄 Load Session"):
+            selected_session = session_options[selected_session_label]
+            load_session_state(selected_session["file"])
+            # Re-initialize orchestrator with loaded state
+            if st.session_state.config:
+                st.session_state.orchestrator = CouncilOrchestrator(
+                    st.session_state.config
+                )
+                st.session_state.orchestrator.turns = st.session_state.turns
+                st.session_state.orchestrator.current_turn = len(st.session_state.turns)
+                st.session_state.orchestrator.start_time = time.time()
+                # Restore agent message histories
+                for turn in st.session_state.turns:
+                    st.session_state.orchestrator._broadcast_turn(turn)
+            st.rerun()
+
+    st.divider()
     st.header("Configuration")
 
     # LiteLLM Proxy
@@ -149,7 +272,9 @@ with st.sidebar:
 
     agent_configs = []
     persona_options = list(PERSONAS.keys())
-    persona_labels = {k: f"{v.name}" for k, v in PERSONAS.items() if k != "the_orchestrator"}
+    persona_labels = {
+        k: f"{v.name}" for k, v in PERSONAS.items() if k != "the_orchestrator"
+    }
 
     # Available models dropdown options
     available_models = [
@@ -164,13 +289,13 @@ with st.sidebar:
         cols = st.columns([2, 2])
         with cols[0]:
             model = st.selectbox(
-                f"Model {i+1}",
+                f"Model {i + 1}",
                 options=available_models,
                 key=f"model_{i}",
             )
         with cols[1]:
             persona = st.selectbox(
-                f"Persona {i+1}",
+                f"Persona {i + 1}",
                 options=list(persona_labels.keys()),
                 format_func=lambda x: persona_labels[x],
                 key=f"persona_{i}",
@@ -201,13 +326,28 @@ with st.sidebar:
 
 
 # Main area
-if not topic.strip():
-    st.info("👈 Enter a topic in the sidebar to begin")
-    st.stop()
+# Check if we have a loaded session
+has_loaded_session = (
+    st.session_state.config is not None
+    and len(st.session_state.turns) > 0
+    and not st.session_state.summary
+)
 
-if len(agent_configs) < 2:
-    st.info("👈 Configure at least 2 agents with models and personas")
-    st.stop()
+# Get topic from loaded session if available
+if has_loaded_session and st.session_state.config:
+    topic = st.session_state.config.topic
+    agent_configs = [
+        (agent.model, agent.persona) for agent in st.session_state.config.agents
+    ]
+
+if not has_loaded_session:
+    if not topic.strip():
+        st.info("👈 Enter a topic in the sidebar to begin")
+        st.stop()
+
+    if len(agent_configs) < 2:
+        st.info("👈 Configure at least 2 agents with models and personas")
+        st.stop()
 
 # Show configuration summary
 with st.expander("📋 Configuration Summary", expanded=True):
@@ -226,7 +366,9 @@ with st.expander("📋 Configuration Summary", expanded=True):
 
 # Start button
 if not st.session_state.running and not st.session_state.summary:
-    if st.button("🚀 Start Council Discussion", type="primary", use_container_width=True):
+    if st.button(
+        "🚀 Start Council Discussion", type="primary", use_container_width=True
+    ):
         # Build config
         agents = [
             AgentConfig(
@@ -244,6 +386,7 @@ if not st.session_state.running and not st.session_state.summary:
             agents=agents,
             litellm_proxy=LiteLLMProxyConfig(api_base=proxy_url, api_key=proxy_key),
             orchestrator_model=orchestrator_model,
+            session_id=st.session_state.session_id,
         )
 
         st.session_state.config = config
@@ -260,6 +403,22 @@ chat_container = st.container()
 with chat_container:
     for turn in st.session_state.turns:
         render_message(turn)
+
+# User chat input - always available when discussion is running
+if st.session_state.running and "orchestrator" in st.session_state:
+    user_message = st.chat_input("💭 Share your thoughts or ask a question...")
+    if user_message:
+        # Queue the message to be inserted after current agent finishes
+        st.session_state.pending_user_message = user_message
+        st.success(
+            "💭 Message queued! It will appear after the current agent responds."
+        )
+
+# Show queued message indicator
+if st.session_state.pending_user_message:
+    st.info(
+        "⏳ Your message is queued and will appear after the current agent responds..."
+    )
 
 # Run discussion - use a single-turn approach for real-time updates
 if st.session_state.running:
@@ -294,6 +453,10 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
     status_text = st.empty()
 
     # Run one turn at a time for real-time display
+    # Reset turn_in_progress if there's a pending message (previous turn was interrupted)
+    if st.session_state.pending_user_message and st.session_state.turn_in_progress:
+        st.session_state.turn_in_progress = False
+
     if not st.session_state.turn_in_progress and orchestrator._should_continue():
         st.session_state.turn_in_progress = True
 
@@ -309,11 +472,14 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
             context = orchestrator._build_context_for_agent(speaker)
 
             # Get response
-            status_text.text(f"Turn {orchestrator.current_turn} - {speaker.config.name} is thinking...")
+            status_text.text(
+                f"Turn {orchestrator.current_turn} - {speaker.config.name} is thinking..."
+            )
             response = await speaker.think_and_respond(context)
 
             # Create turn
             from agent_council.orchestrator import DiscussionTurn
+
             turn = DiscussionTurn(
                 turn_number=orchestrator.current_turn,
                 agent_name=response["agent_name"],
@@ -328,7 +494,10 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
             orchestrator._broadcast_turn(turn)
 
             # Orchestrator interjection
-            if orchestrator.current_turn % orchestrator.config.orchestrator_frequency == 0:
+            if (
+                orchestrator.current_turn % orchestrator.config.orchestrator_frequency
+                == 0
+            ):
                 await orchestrator._orchestrator_interjection()
 
             return turn
@@ -349,18 +518,50 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
         progress = min(orchestrator.current_turn / orchestrator.config.max_turns, 1.0)
         progress_bar.progress(progress)
 
+        # Insert pending user message if there is one
+        if st.session_state.pending_user_message:
+            from agent_council.orchestrator import DiscussionTurn
+
+            user_turn = DiscussionTurn(
+                turn_number=orchestrator.current_turn + 0.1,
+                agent_name="You",
+                persona="Human",
+                content=st.session_state.pending_user_message,
+            )
+            st.session_state.turns.append(user_turn)
+            orchestrator.turns.append(user_turn)
+            orchestrator._broadcast_turn(user_turn)
+
+            # Clear the pending message
+            st.session_state.pending_user_message = None
+            # Trigger next turn immediately
+            st.session_state.trigger_next_turn = True
+
         # Check if done
         if not orchestrator._should_continue():
             # Generate summary
             st.session_state.summary = orchestrator._generate_summary_sync()
             st.session_state.transcript_file = orchestrator._save_transcript()
             st.session_state.running = False
+            # Save final session state
+            save_session_state()
             del st.session_state.orchestrator
+        else:
+            # Auto-save session after each turn
+            save_session_state()
+
+        # Check if we should trigger next turn immediately (after user message)
+        if st.session_state.trigger_next_turn:
+            st.session_state.trigger_next_turn = False
+            # Don't wait, trigger next turn immediately
+            st.rerun()
 
         # Rerun to show new message
         st.rerun()
 
-    status_text.text(f"Turn {orchestrator.current_turn}/{orchestrator.config.max_turns} complete")
+    status_text.text(
+        f"Turn {orchestrator.current_turn}/{orchestrator.config.max_turns} complete"
+    )
 
 
 # Display summary

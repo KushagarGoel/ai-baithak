@@ -21,7 +21,8 @@ class LiteLLMProxyConfig:
     """Configuration for personal LiteLLM proxy deployment."""
 
     api_base: str  # e.g., "http://localhost:4000" or "https://your-litellm.com"
-    api_key: str   # Your LiteLLM proxy API key
+    api_key: str  # Your LiteLLM proxy API key
+
 
 @dataclass
 class CouncilConfig:
@@ -49,8 +50,13 @@ class CouncilConfig:
     # Tool settings
     workspace_path: str = "."
 
+    # Session ID for organizing files
+    session_id: Optional[str] = None
+
     @classmethod
-    def create_default(cls, topic: str, max_duration_minutes: int = 10) -> "CouncilConfig":
+    def create_default(
+        cls, topic: str, max_duration_minutes: int = 10
+    ) -> "CouncilConfig":
         """Create a default configuration with diverse agents."""
         return cls(
             topic=topic,
@@ -111,11 +117,13 @@ class CouncilConfig:
         agents = []
         for i, model in enumerate(models):
             persona = personas[i % len(personas)]
-            agents.append(AgentConfig(
-                name=f"Agent_{i+1}_{persona.replace('the_', '').title()}",
-                model=model,
-                persona=persona,
-            ))
+            agents.append(
+                AgentConfig(
+                    name=f"Agent_{i + 1}_{persona.replace('the_', '').title()}",
+                    model=model,
+                    persona=persona,
+                )
+            )
 
         return cls(
             topic=topic,
@@ -140,10 +148,13 @@ class CouncilConfig:
             errors.append("Maximum 10 agents allowed")
 
         from .personas import list_personas
+
         valid_personas = set(list_personas())
 
         for agent in self.agents:
             if agent.persona not in valid_personas:
-                errors.append(f"Unknown persona '{agent.persona}' for agent '{agent.name}'")
+                errors.append(
+                    f"Unknown persona '{agent.persona}' for agent '{agent.name}'"
+                )
 
         return errors
