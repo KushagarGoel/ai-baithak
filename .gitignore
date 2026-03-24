@@ -9,3 +9,6 @@ chats/
 sessions/
 
 todo
+.next
+venv
+node_modules

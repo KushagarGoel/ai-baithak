@@ -1,0 +1,166 @@
+export interface Persona {
+  name: string;
+  system_prompt: string;
+  temperature: number;
+  max_tokens?: number;
+  speak_probability: number;
+}
+
+export interface AgentConfig {
+  name: string;
+  model: string;
+  persona: string;
+  temperature?: number;
+  max_tokens?: number;
+  tools_enabled: boolean;
+}
+
+export interface LiteLLMProxyConfig {
+  api_base: string;
+  api_key: string;
+}
+
+export interface CouncilConfig {
+  topic: string;
+  max_duration_minutes: number;
+  max_turns: number;
+  min_turns: number;
+  agents: AgentConfig[];
+  litellm_proxy?: LiteLLMProxyConfig;
+  orchestrator_model: string;
+  orchestrator_frequency: number;
+  context_compression_threshold: number;
+  session_id?: string;
+  save_transcript?: boolean;
+  workspace_path?: string;
+}
+
+export interface DiscussionTurn {
+  turn_number: number;
+  agent_name: string;
+  persona: string;
+  content: string;
+  timestamp: number;
+  tool_calls: ToolCall[];
+  tool_results: ToolResult[];
+  segment: number;
+}
+
+export interface ToolCall {
+  name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface ToolResult {
+  tool: string;
+  arguments: Record<string, unknown>;
+  success: boolean;
+  data?: unknown;
+  error?: string;
+}
+
+export interface DiscussionSegment {
+  segment_number: number;
+  start_turn: number;
+  end_turn?: number;
+  summary: string;
+  orchestrator_message: string;
+}
+
+export interface DiscussionSummary {
+  topic: string;
+  start_time: string;
+  end_time: string;
+  total_turns: number;
+  key_points: string[];
+  consensus_reached: boolean;
+  disagreements: string[];
+  action_items: string[];
+  final_recommendation?: string;
+}
+
+export interface Session {
+  id: string;
+  topic: string;
+  turns: number;
+  date: string;
+  config?: CouncilConfig;
+  total_tokens?: number;
+  segments?: DiscussionSegment[];
+  current_segment?: number;
+}
+
+export interface OrchestratorState {
+  current_turn: number;
+  max_turns: number;
+  current_segment: number;
+  total_segments: number;
+  total_tokens: number;
+  is_running: boolean;
+  status: 'idle' | 'thinking' | 'speaking' | 'orchestrating' | 'completed' | 'error';
+  current_agent?: string;
+}
+
+export interface KeyInsight {
+  id?: number;
+  insight_number: number;
+  content: string;
+  source: 'orchestrator' | 'agent';
+  source_agent?: string;
+  turn_number?: number;
+  segment: number;
+  created_at?: string;
+}
+
+export interface ProgressUpdate {
+  type: 'turn' | 'segment' | 'orchestrator' | 'insights' | 'complete' | 'error';
+  turn?: DiscussionTurn;
+  segment?: DiscussionSegment;
+  orchestrator_message?: string;
+  insights?: KeyInsight[];
+  total_count?: number;
+  summary?: DiscussionSummary;
+  error?: string;
+  state: OrchestratorState;
+}
+
+export type ViewMode = 'config' | 'discussion' | 'archives' | 'sessions';
+
+export interface InsightsUpdate {
+  type: 'insights';
+  insights: KeyInsight[];
+  total_count: number;
+  state: OrchestratorState;
+}
+
+export const PERSONA_COLORS: Record<string, { bg: string; border: string; glow: string }> = {
+  the_lazy_one: { bg: 'rgba(34, 197, 94, 0.15)', border: '#22c55e', glow: 'rgba(34, 197, 94, 0.3)' },
+  the_egomaniac: { bg: 'rgba(245, 158, 11, 0.15)', border: '#f59e0b', glow: 'rgba(245, 158, 11, 0.3)' },
+  the_devils_advocate: { bg: 'rgba(239, 68, 68, 0.15)', border: '#ef4444', glow: 'rgba(239, 68, 68, 0.3)' },
+  the_creative: { bg: 'rgba(168, 85, 247, 0.15)', border: '#a855f7', glow: 'rgba(168, 85, 247, 0.3)' },
+  the_pragmatist: { bg: 'rgba(59, 130, 246, 0.15)', border: '#3b82f6', glow: 'rgba(59, 130, 246, 0.3)' },
+  the_empath: { bg: 'rgba(236, 72, 153, 0.15)', border: '#ec4899', glow: 'rgba(236, 72, 153, 0.3)' },
+  the_researcher: { bg: 'rgba(99, 102, 241, 0.15)', border: '#6366f1', glow: 'rgba(99, 102, 241, 0.3)' },
+  the_orchestrator: { bg: 'rgba(234, 179, 8, 0.15)', border: '#eab308', glow: 'rgba(234, 179, 8, 0.3)' },
+};
+
+export const AVAILABLE_MODELS = [
+  'kimi-latest',
+  'open-fast',
+  'open-large',
+  'glm-latest',
+  'minimaxai/minimax-m2',
+  'anthropic/claude-3-haiku-20240307',
+  'anthropic/claude-3-sonnet-20240229',
+  'openai/gpt-4o',
+  'openai/gpt-4o-mini',
+];
+
+export const DEFAULT_AGENT_CONFIGS: [string, string][] = [
+  ['kimi-latest', 'the_lazy_one'],
+  ['open-fast', 'the_egomaniac'],
+  ['glm-latest', 'the_devils_advocate'],
+  ['open-large', 'the_creative'],
+  ['glm-latest', 'the_researcher'],
+  ['kimi-latest', 'the_pragmatist'],
+];
