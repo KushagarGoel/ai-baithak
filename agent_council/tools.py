@@ -77,13 +77,22 @@ class ReadFileTool(BaseTool):
             "required": ["file_path"],
         }
 
-    async def execute(self, file_path: str, limit: Optional[int] = None, offset: Optional[int] = None) -> ToolResult:
+    async def execute(self, file_path: Optional[str] = None, path: Optional[str] = None, limit: Optional[int] = None, offset: Optional[int] = None) -> ToolResult:
         try:
+            # Support both 'file_path' and 'path' parameters
+            target_path = file_path or path
+            if not target_path:
+                return ToolResult(
+                    success=False,
+                    data=None,
+                    error="Missing required parameter: file_path (or path)"
+                )
+
             # Resolve path relative to base_path
-            if not os.path.isabs(file_path):
-                full_path = os.path.join(self.base_path, file_path)
+            if not os.path.isabs(target_path):
+                full_path = os.path.join(self.base_path, target_path)
             else:
-                full_path = file_path
+                full_path = target_path
 
             full_path = os.path.abspath(full_path)
 

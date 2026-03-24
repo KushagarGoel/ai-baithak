@@ -134,30 +134,94 @@ def save_session_state():
 
     # Get data from orchestrator
     tokens_used = 0
-    segments = []
+    segments_data = []
     current_segment = 0
     if "orchestrator" in st.session_state:
         if hasattr(st.session_state.orchestrator, 'total_tokens_used'):
             tokens_used = st.session_state.orchestrator.total_tokens_used
         if hasattr(st.session_state.orchestrator, 'segments'):
-            segments = st.session_state.orchestrator.segments
+            # Convert segments to plain dicts for pickle safety
+            for seg in st.session_state.orchestrator.segments:
+                segments_data.append({
+                    'segment_number': getattr(seg, 'segment_number', 0),
+                    'start_turn': getattr(seg, 'start_turn', 1),
+                    'end_turn': getattr(seg, 'end_turn', None),
+                    'summary': getattr(seg, 'summary', ''),
+                    'orchestrator_message': getattr(seg, 'orchestrator_message', ''),
+                })
         if hasattr(st.session_state.orchestrator, 'current_segment'):
             current_segment = st.session_state.orchestrator.current_segment
+
+    # Convert turns to plain dicts for pickle safety
+    turns_data = []
+    for turn in st.session_state.turns:
+        turns_data.append({
+            'turn_number': getattr(turn, 'turn_number', 0),
+            'agent_name': getattr(turn, 'agent_name', ''),
+            'persona': getattr(turn, 'persona', ''),
+            'content': getattr(turn, 'content', ''),
+            'timestamp': getattr(turn, 'timestamp', 0),
+            'tool_calls': getattr(turn, 'tool_calls', []),
+            'tool_results': getattr(turn, 'tool_results', []),
+            'segment': getattr(turn, 'segment', 0),
+        })
+
+    # Convert config to dict for pickle safety
+    config_dict = None
+    if st.session_state.config:
+        config = st.session_state.config
+        config_dict = {
+            'topic': config.topic,
+            'max_duration_minutes': config.max_duration_minutes,
+            'max_turns': config.max_turns,
+            'min_turns': config.min_turns,
+            'agents': [
+                {
+                    'name': a.name,
+                    'model': a.model,
+                    'persona': a.persona,
+                    'temperature': a.temperature,
+                    'max_tokens': a.max_tokens,
+                    'tools_enabled': a.tools_enabled,
+                }
+                for a in config.agents
+            ],
+            'orchestrator_model': config.orchestrator_model,
+            'orchestrator_frequency': config.orchestrator_frequency,
+            'context_compression_threshold': config.context_compression_threshold,
+            'session_id': config.session_id,
+        }
+        if config.litellm_proxy:
+            config_dict['litellm_proxy'] = {
+                'api_base': config.litellm_proxy.api_base,
+                'api_key': config.litellm_proxy.api_key,
+            }
 
     # Save session data
     session_data = {
         "session_id": st.session_state.session_id,
-        "turns": st.session_state.turns,
-        "config": st.session_state.config,
+        "turns": turns_data,
+        "config": config_dict,
         "summary": st.session_state.summary,
         "running": st.session_state.running,
         "total_tokens": tokens_used,
-        "segments": segments,
+        "segments": segments_data,
         "current_segment": current_segment,
     }
 
-    with open(session_file, "wb") as f:
-        pickle.dump(session_data, f)
+    try:
+        with open(session_file, "wb") as f:
+            pickle.dump(session_data, f)
+    except TypeError as e:
+        print(f"[SAVE ERROR] Cannot pickle session data: {e}")
+        # Try to identify which field is causing the issue
+        for key, value in session_data.items():
+            try:
+                pickle.dumps(value)
+            except TypeError as te:
+                print(f"[SAVE ERROR] Field '{key}' is not pickleable: {te}")
+        # Don't crash, just skip saving
+        return None
 
     return session_file
 
@@ -168,13 +232,63 @@ def load_session_state(session_file: str):
         session_data = pickle.load(f)
 
     st.session_state.session_id = session_data["session_id"]
-    st.session_state.turns = session_data["turns"]
-    st.session_state.config = session_data["config"]
     st.session_state.summary = session_data["summary"]
     st.session_state.running = session_data.get("running", False)
     st.session_state.total_tokens = session_data.get("total_tokens", 0)
     st.session_state.segments = session_data.get("segments", [])
     st.session_state.current_segment = session_data.get("current_segment", 0)
+
+    # Reconstruct config from dict
+    config_dict = session_data.get("config")
+    if config_dict:
+        from agent_council.config import CouncilConfig, AgentConfig, LiteLLMProxyConfig
+        agents = [
+            AgentConfig(
+                name=a['name'],
+                model=a['model'],
+                persona=a['persona'],
+                temperature=a.get('temperature'),
+                max_tokens=a.get('max_tokens'),
+                tools_enabled=a.get('tools_enabled', True),
+            )
+            for a in config_dict.get('agents', [])
+        ]
+        litellm_proxy = None
+        if config_dict.get('litellm_proxy'):
+            litellm_proxy = LiteLLMProxyConfig(
+                api_base=config_dict['litellm_proxy']['api_base'],
+                api_key=config_dict['litellm_proxy']['api_key'],
+            )
+        st.session_state.config = CouncilConfig(
+            topic=config_dict['topic'],
+            max_duration_minutes=config_dict.get('max_duration_minutes', 10),
+            max_turns=config_dict.get('max_turns', 20),
+            min_turns=config_dict.get('min_turns', 5),
+            agents=agents,
+            litellm_proxy=litellm_proxy,
+            orchestrator_model=config_dict.get('orchestrator_model', 'anthropic/claude-3-haiku-20240307'),
+            orchestrator_frequency=config_dict.get('orchestrator_frequency', 3),
+            context_compression_threshold=config_dict.get('context_compression_threshold', 40),
+            session_id=config_dict.get('session_id'),
+        )
+    else:
+        st.session_state.config = None
+
+    # Reconstruct turn objects from dicts
+    from agent_council.orchestrator import DiscussionTurn
+    turns_data = session_data.get("turns", [])
+    st.session_state.turns = []
+    for turn_dict in turns_data:
+        st.session_state.turns.append(DiscussionTurn(
+            turn_number=turn_dict.get('turn_number', 0),
+            agent_name=turn_dict.get('agent_name', ''),
+            persona=turn_dict.get('persona', ''),
+            content=turn_dict.get('content', ''),
+            timestamp=turn_dict.get('timestamp', 0),
+            tool_calls=turn_dict.get('tool_calls', []),
+            tool_results=turn_dict.get('tool_results', []),
+            segment=turn_dict.get('segment', 0),
+        ))
 
     return session_data
 
@@ -192,13 +306,20 @@ def get_saved_sessions():
             try:
                 with open(filepath, "rb") as f:
                     session_data = pickle.load(f)
+                # Handle both old (object) and new (dict) config formats
+                config = session_data.get("config")
+                if config:
+                    if isinstance(config, dict):
+                        topic = config.get('topic', 'Unknown')
+                    else:
+                        topic = getattr(config, 'topic', 'Unknown')
+                else:
+                    topic = 'Unknown'
                 sessions.append(
                     {
                         "file": filepath,
                         "id": session_data.get("session_id", filename),
-                        "topic": session_data.get("config", {}).topic
-                        if session_data.get("config")
-                        else "Unknown",
+                        "topic": topic,
                         "turns": len(session_data.get("turns", [])),
                         "date": datetime.strptime(
                             session_data.get("session_id", "19700101_000000"),

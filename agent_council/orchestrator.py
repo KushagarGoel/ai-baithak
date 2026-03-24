@@ -69,6 +69,7 @@ class CouncilOrchestrator:
         self.current_turn = 0
         self.total_tokens_used: int = 0
         self.current_segment = 0
+        self._pending_segment_transition = False
         self._setup_agents()
         # Initialize first segment
         self.segments.append(DiscussionSegment(
@@ -198,9 +199,12 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
 
         return True
 
-    async def _check_and_start_new_segment(self) -> bool:
+    async def _check_and_start_new_segment(self, allow_transition: bool = True) -> bool:
         """
         Check if any agent's context exceeds the threshold and start a new segment if needed.
+
+        Args:
+            allow_transition: If False, only check but don't transition (used during tool calls)
 
         When triggered, this will:
         1. Close the current segment
@@ -222,10 +226,17 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
         if not agents_needing_reset:
             return False
 
+        # If we're in the middle of a turn (tool calls), queue the transition for next turn
+        if not allow_transition:
+            print(f"[SEGMENT TRANSITION] {len(agents_needing_reset)} agent(s) exceeded {threshold} messages. Will transition after current turn completes.")
+            self._pending_segment_transition = True
+            return False
+
         print(f"[SEGMENT TRANSITION] {len(agents_needing_reset)} agent(s) exceeded {threshold} messages. Starting new segment...")
 
         # Start new segment
         await self._start_new_segment()
+        self._pending_segment_transition = False
 
         return True
 
@@ -233,19 +244,22 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
         """
         Start a new discussion segment.
 
-        This generates a summary, closes the current segment, and creates
+        This generates a detailed summary, closes the current segment, and creates
         a fresh start for all agents with an orchestrator transition message.
         """
-        # Generate summary of current segment
-        summary = await self._generate_segment_summary()
+        # Generate detailed summary of current segment for orchestrator
+        detailed_summary = await self._generate_detailed_segment_summary()
+
+        # Generate concise summary for key insights file
+        concise_summary = await self._generate_concise_summary()
 
         # Close current segment
         current_seg = self.segments[self.current_segment]
         current_seg.end_turn = self.current_turn
-        current_seg.summary = summary
+        current_seg.summary = concise_summary
 
-        # Create orchestrator transition message
-        transition_message = await self._generate_transition_message(summary)
+        # Create orchestrator transition message with detailed summary
+        transition_message = self._generate_transition_message(detailed_summary)
         current_seg.orchestrator_message = transition_message
 
         # Create new segment
@@ -253,7 +267,7 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
         new_segment = DiscussionSegment(
             segment_number=self.current_segment,
             start_turn=self.current_turn + 1,
-            summary=summary,
+            summary=concise_summary,
             orchestrator_message=transition_message
         )
         self.segments.append(new_segment)
@@ -316,29 +330,38 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
 
         print(f"[SEGMENT TRANSITION] {agent.config.name} reset: {old_count} -> {len(agent.messages)} messages")
 
-    async def _generate_segment_summary(self) -> str:
-        """Generate a summary of the discussion for context compression."""
-        # Get the last N turns to summarize (excluding system messages)
-        turns_to_summarize = self.turns[-20:] if len(self.turns) >= 20 else self.turns
+    async def _generate_detailed_segment_summary(self) -> str:
+        """Generate a detailed summary for the orchestrator transition message."""
+        # Get all turns in current segment
+        segment_turns = [t for t in self.turns if t.segment == self.current_segment]
 
-        if not turns_to_summarize:
+        if not segment_turns:
             return "No prior discussion."
 
         # Build discussion text
-        discussion_text = "\n".join([
-            f"{t.agent_name}: {t.content[:500]}"  # Truncate individual messages
-            for t in turns_to_summarize
+        discussion_text = "\n\n".join([
+            f"{t.agent_name}: {t.content[:800]}"
+            for t in segment_turns[-15:]  # Last 15 turns
         ])
 
-        prompt = f"""Summarize this council discussion concisely. Focus on:
-1. Key points and arguments made
-2. Any consensus or disagreements
-3. Important facts or insights shared
+        prompt = f"""Provide a comprehensive summary of this council discussion segment. Structure your response:
+
+**Key Arguments Made:**
+- List the main points each agent contributed
+
+**Points of Consensus:**
+- What did agents agree on?
+
+**Open Questions / Disagreements:**
+- What remains unresolved?
+
+**Critical Insights:**
+- Most important facts or perspectives shared
 
 Discussion:
 {discussion_text}
 
-Provide a brief summary (max {self.config.context_summary_max_chars} characters):"""
+Provide a detailed summary (max 1500 characters):"""
 
         try:
             # Determine model format for LiteLLM proxy
@@ -354,7 +377,7 @@ Provide a brief summary (max {self.config.context_summary_max_chars} characters)
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": 0.3,
-                "max_tokens": 500,
+                "max_tokens": 600,
             }
 
             if self.config.litellm_proxy:
@@ -370,32 +393,93 @@ Provide a brief summary (max {self.config.context_summary_max_chars} characters)
             summary = response.choices[0].message.content.strip()
 
             # Enforce max length
-            if len(summary) > self.config.context_summary_max_chars:
-                summary = summary[:self.config.context_summary_max_chars - 3] + "..."
+            if len(summary) > 1500:
+                summary = summary[:1497] + "..."
 
             return summary
 
         except Exception as e:
-            print(f"[CONTEXT COMPRESSION] Failed to generate summary: {e}")
+            print(f"[CONTEXT COMPRESSION] Failed to generate detailed summary: {e}")
             # Fallback: create a simple summary from turns
-            return self._generate_simple_summary(turns_to_summarize)
+            return self._generate_simple_summary(segment_turns)
+
+    async def _generate_concise_summary(self) -> str:
+        """Generate a concise summary for key insights file."""
+        # Get all turns in current segment
+        segment_turns = [t for t in self.turns if t.segment == self.current_segment]
+
+        if not segment_turns:
+            return "No prior discussion."
+
+        # Build discussion text (only agent responses, skip orchestrator)
+        agent_turns = [t for t in segment_turns if t.agent_name != "Orchestrator"][-10:]
+        discussion_text = "\n".join([
+            f"{t.agent_name}: {t.content[:400]}"
+            for t in agent_turns
+        ])
+
+        prompt = f"""Extract only the 3-5 most important insights from this discussion. Be extremely concise.
+
+Discussion:
+{discussion_text}
+
+Provide a brief bullet-point summary (max 500 characters, focus only on critical insights):"""
+
+        try:
+            # Determine model format for LiteLLM proxy
+            if (
+                self.config.litellm_proxy
+                and not self.config.orchestrator_model.startswith("openai/")
+            ):
+                model = f"openai/{self.config.orchestrator_model}"
+            else:
+                model = self.config.orchestrator_model
+
+            completion_kwargs = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 200,
+            }
+
+            if self.config.litellm_proxy:
+                completion_kwargs["api_base"] = self.config.litellm_proxy.api_base
+                completion_kwargs["api_key"] = self.config.litellm_proxy.api_key
+
+            response = completion(**completion_kwargs)
+
+            # Track token usage
+            if hasattr(response, 'usage') and response.usage:
+                self.total_tokens_used += response.usage.total_tokens
+
+            summary = response.choices[0].message.content.strip()
+
+            # Enforce max length
+            if len(summary) > 500:
+                summary = summary[:497] + "..."
+
+            return summary
+
+        except Exception as e:
+            print(f"[CONTEXT COMPRESSION] Failed to generate concise summary: {e}")
+            return self._generate_simple_summary(agent_turns)
 
     def _generate_simple_summary(self, turns: list[DiscussionTurn]) -> str:
         """Generate a simple summary without LLM call (fallback)."""
         key_points = []
-        for t in turns[-10:]:  # Last 10 turns
-            content = t.content[:200]
+        for t in turns[-5:]:  # Last 5 turns only
+            content = t.content[:150]
             key_points.append(f"- {t.agent_name}: {content}...")
 
-        summary = "Discussion Summary:\n" + "\n".join(key_points)
+        summary = "Key Points:\n" + "\n".join(key_points)
 
         # Truncate if too long
-        if len(summary) > self.config.context_summary_max_chars:
-            summary = summary[:self.config.context_summary_max_chars - 3] + "..."
+        if len(summary) > 500:
+            summary = summary[:497] + "..."
 
         return summary
 
-    async def _generate_transition_message(self, summary: str) -> str:
+    def _generate_transition_message(self, summary: str) -> str:
         """
         Generate a concise transition message for a new segment.
 
@@ -508,17 +592,20 @@ Your role:
 
 Be concise but helpful. Speak as the Orchestrator."""
 
-        # Prompt to identify key insights worth saving
-        insights_prompt = f"""Analyze this discussion excerpt and identify the most important insights worth preserving for the rest of the conversation.
+        # Prompt to identify key insights worth saving (only critical ones)
+        insights_prompt = f"""Analyze this discussion and extract ONLY critical insights that future segments must know.
+
+Include ONLY:
+- Novel research findings with specific citations
+- Major architectural decisions or trade-offs
+- Critical disagreements that affect the direction
+- Consensus on core requirements
 
 Discussion:
 {discussion_text}
 
-Return a JSON array of key insights (max 3). Each insight should be a string that captures an important point, fact, or perspective raised.
-
-Format: {{"insights": ["insight 1", "insight 2", "insight 3"]}}
-
-If no particularly important insights, return {{"insights": []}}"""
+Return JSON with ONLY essential insights (max 2, be extremely selective):
+Format: {{"insights": ["insight"]}} or {{"insights": []}} if nothing critical"""
 
         try:
             # Determine model format for LiteLLM proxy
@@ -645,24 +732,31 @@ If no particularly important insights, return {{"insights": []}}"""
         return session_folder
 
     async def _extract_and_save_insights(self, turn: DiscussionTurn):
-        """Extract and save important insights from a single turn."""
+        """Extract and save only high-value insights from a single turn."""
         import json
         import re
 
-        # Skip orchestrator's own messages
-        if turn.agent_name == "Orchestrator":
+        # Skip orchestrator's own messages and very short responses
+        if turn.agent_name == "Orchestrator" or len(turn.content) < 200:
             return
 
-        insights_prompt = f"""Analyze this response and extract any important insights, facts, or perspectives worth preserving for the rest of the conversation.
+        # Only extract insights from every 3rd turn to reduce noise
+        if turn.turn_number % 3 != 0:
+            return
+
+        insights_prompt = f"""Extract ONLY critical insights from this response that would be valuable for future segments to know.
+
+Criteria for inclusion:
+- Novel facts or research findings with citations
+- Important architectural decisions or trade-offs
+- Consensus points that future agents should know
+- Critical disagreements that shaped the discussion
 
 Agent: {turn.agent_name} ({turn.persona})
-Content: {turn.content}
+Content: {turn.content[:1500]}
 
-Return a JSON array of key insights (max 2). Each insight should be a string that captures an important point, fact, or perspective raised.
-
-Format: {{"insights": ["insight 1", "insight 2"]}}
-
-If no particularly important insights, return {{"insights": []}}"""
+Return JSON with ONLY high-value insights (max 2, be very selective):
+Format: {{"insights": ["insight 1"]}} or {{"insights": []}} if nothing truly critical"""
 
         try:
             # Determine model format for LiteLLM proxy
@@ -679,7 +773,7 @@ If no particularly important insights, return {{"insights": []}}"""
                 "model": model,
                 "messages": [{"role": "user", "content": insights_prompt}],
                 "temperature": 0.3,
-                "max_tokens": 300,
+                "max_tokens": 200,
             }
 
             # Add LiteLLM proxy settings if configured
