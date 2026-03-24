@@ -132,6 +132,18 @@ def save_session_state():
         sessions_dir, f"session_{st.session_state.session_id}.pkl"
     )
 
+    # Get data from orchestrator
+    tokens_used = 0
+    segments = []
+    current_segment = 0
+    if "orchestrator" in st.session_state:
+        if hasattr(st.session_state.orchestrator, 'total_tokens_used'):
+            tokens_used = st.session_state.orchestrator.total_tokens_used
+        if hasattr(st.session_state.orchestrator, 'segments'):
+            segments = st.session_state.orchestrator.segments
+        if hasattr(st.session_state.orchestrator, 'current_segment'):
+            current_segment = st.session_state.orchestrator.current_segment
+
     # Save session data
     session_data = {
         "session_id": st.session_state.session_id,
@@ -139,6 +151,9 @@ def save_session_state():
         "config": st.session_state.config,
         "summary": st.session_state.summary,
         "running": st.session_state.running,
+        "total_tokens": tokens_used,
+        "segments": segments,
+        "current_segment": current_segment,
     }
 
     with open(session_file, "wb") as f:
@@ -157,6 +172,9 @@ def load_session_state(session_file: str):
     st.session_state.config = session_data["config"]
     st.session_state.summary = session_data["summary"]
     st.session_state.running = session_data.get("running", False)
+    st.session_state.total_tokens = session_data.get("total_tokens", 0)
+    st.session_state.segments = session_data.get("segments", [])
+    st.session_state.current_segment = session_data.get("current_segment", 0)
 
     return session_data
 
@@ -229,6 +247,11 @@ with st.sidebar:
                 st.session_state.orchestrator.turns = st.session_state.turns
                 st.session_state.orchestrator.current_turn = len(st.session_state.turns)
                 st.session_state.orchestrator.start_time = time.time()
+                # Restore segment data
+                if hasattr(st.session_state, 'segments'):
+                    st.session_state.orchestrator.segments = st.session_state.segments
+                if hasattr(st.session_state, 'current_segment'):
+                    st.session_state.orchestrator.current_segment = st.session_state.current_segment
                 # Restore agent message histories
                 for turn in st.session_state.turns:
                     st.session_state.orchestrator._broadcast_turn(turn)
@@ -260,15 +283,37 @@ with st.sidebar:
     )
     max_time = st.slider("Max Duration (minutes)", 1, 600, 5)
 
+    # Segment/Context Settings
+    st.subheader("Segment Settings")
+    st.markdown("When agents exceed this message count, a new segment starts with a summary:")
+    segment_threshold = st.slider(
+        "Messages before new segment",
+        min_value=5,
+        max_value=100,
+        value=20,
+        step=5,
+        help="When any agent reaches this message count, the discussion will start a new segment with a summary of prior discussion"
+    )
+
     st.divider()
 
     # Agent Assignment
     st.subheader("Assign Personas to Models")
     st.markdown("Enter your LiteLLM model names and select personas:")
 
+    # Default agent configuration (6 agents as shown in screenshot)
+    default_agents = [
+        ("kimi-latest", "the_lazy_one"),           # Model 1: The Lazy One
+        ("open-fast", "the_egomaniac"),            # Model 2: The Know-It-All
+        ("glm-latest", "the_devils_advocate"),     # Model 3: Devil's Advocate
+        ("open-large", "the_creative"),            # Model 4: The Creative
+        ("glm-latest", "the_researcher"),          # Model 5: The Researcher
+        ("kimi-latest", "the_pragmatist"),         # Model 6: The Pragmatist
+    ]
+
     # Dynamic agent rows
     if "agent_rows" not in st.session_state:
-        st.session_state.agent_rows = 3
+        st.session_state.agent_rows = 6  # Default to 6 agents
 
     agent_configs = []
     persona_options = list(PERSONAS.keys())
@@ -286,11 +331,15 @@ with st.sidebar:
     ]
 
     for i in range(st.session_state.agent_rows):
+        # Get default for this row, or use first default if beyond defaults
+        default = default_agents[i] if i < len(default_agents) else default_agents[0]
+
         cols = st.columns([2, 2])
         with cols[0]:
             model = st.selectbox(
                 f"Model {i + 1}",
                 options=available_models,
+                index=available_models.index(default[0]) if default[0] in available_models else 0,
                 key=f"model_{i}",
             )
         with cols[1]:
@@ -298,6 +347,7 @@ with st.sidebar:
                 f"Persona {i + 1}",
                 options=list(persona_labels.keys()),
                 format_func=lambda x: persona_labels[x],
+                index=list(persona_labels.keys()).index(default[1]) if default[1] in persona_labels else 0,
                 key=f"persona_{i}",
             )
         if model.strip():
@@ -318,9 +368,10 @@ with st.sidebar:
 
     # Orchestrator model
     st.subheader("Orchestrator (Manager)")
-    orchestrator_model = st.text_input(
+    orchestrator_model = st.selectbox(
         "Orchestrator Model",
-        value="claude-3-haiku",
+        options=available_models,
+        index=0,  # Default to kimi-latest (first in list)
         help="Model to use for the manager that guides discussion",
     )
 
@@ -351,13 +402,24 @@ if not has_loaded_session:
 
 # Show configuration summary
 with st.expander("📋 Configuration Summary", expanded=True):
-    cols = st.columns(3)
+    cols = st.columns(4)
     with cols[0]:
         st.metric("Agents", len(agent_configs))
     with cols[1]:
         st.metric("Max Duration", f"{max_time} min")
     with cols[2]:
         st.metric("Models", len(set(m for m, _ in agent_configs)))
+    with cols[3]:
+        # Show token usage if orchestrator exists
+        tokens_display = "0"
+        if "orchestrator" in st.session_state and hasattr(st.session_state.orchestrator, 'total_tokens_used'):
+            tokens = st.session_state.orchestrator.total_tokens_used
+            # Format with k suffix for large numbers
+            if tokens >= 1000:
+                tokens_display = f"{tokens / 1000:.1f}k"
+            else:
+                tokens_display = str(tokens)
+        st.metric("Tokens Used", tokens_display)
 
     st.markdown("**Agents:**")
     for model, persona in agent_configs:
@@ -387,6 +449,7 @@ if not st.session_state.running and not st.session_state.summary:
             litellm_proxy=LiteLLMProxyConfig(api_base=proxy_url, api_key=proxy_key),
             orchestrator_model=orchestrator_model,
             session_id=st.session_state.session_id,
+            context_compression_threshold=segment_threshold,
         )
 
         st.session_state.config = config
@@ -397,12 +460,99 @@ if not st.session_state.running and not st.session_state.summary:
 
 # Display discussion area
 st.header("💬 Discussion")
-chat_container = st.container()
 
-# Show existing turns
-with chat_container:
+
+def render_orchestrator_card(content: str, title: str = "Orchestrator"):
+    """Render an orchestrator message card."""
+    html = f"""
+    <div class="agent-card message-orchestrator" style="border: 2px solid #eab308; margin-bottom: 1rem;">
+        <div class="agent-header">
+            {title}
+            <span class="persona-tag">Manager</span>
+        </div>
+        <div class="message-content">{content.replace(chr(10), "<br>")}</div>
+    </div>
+    """
+    st.markdown(html, unsafe_allow_html=True)
+
+
+# Show turns grouped by segments as sub-tabs
+if st.session_state.turns:
+    # Get orchestrator segments info if available
+    orchestrator = st.session_state.get("orchestrator")
+    segment_info = {}
+    if orchestrator and hasattr(orchestrator, 'segments'):
+        for seg in orchestrator.segments:
+            segment_info[seg.segment_number] = {
+                'summary': seg.summary,
+                'orchestrator_message': seg.orchestrator_message,
+                'start_turn': seg.start_turn,
+                'end_turn': seg.end_turn,
+            }
+
+    # Get unique segments from turns
+    segments = {}
     for turn in st.session_state.turns:
-        render_message(turn)
+        seg = getattr(turn, 'segment', 0)
+        if seg not in segments:
+            segments[seg] = []
+        segments[seg].append(turn)
+
+    # Sort segments
+    sorted_segments = sorted(segments.keys())
+
+    # Always create tabs for segments (even if single segment for consistency)
+    tab_labels = [f"Segment {s + 1}" for s in sorted_segments]
+    tabs = st.tabs(tab_labels)
+
+    # Load key insights if available
+    key_insights = []
+    insights_file = None
+    if orchestrator and hasattr(orchestrator, '_get_session_folder'):
+        try:
+            session_folder = orchestrator._get_session_folder()
+            insights_path = os.path.join(session_folder, "key_insights.md")
+            if os.path.exists(insights_path):
+                insights_file = insights_path
+                with open(insights_path, "r") as f:
+                    key_insights = f.read()
+        except Exception:
+            pass
+
+    for i, seg_num in enumerate(sorted_segments):
+        with tabs[i]:
+            # Show segment header with orchestrator message for new segments (except first)
+            info = segment_info.get(seg_num, {})
+
+            if seg_num > 0 and info.get('orchestrator_message'):
+                # This is a continuation segment - show the transition message (includes summary)
+                render_orchestrator_card(
+                    info['orchestrator_message'],
+                    title=f"Segment {seg_num + 1} - Continued Discussion"
+                )
+                st.divider()
+            elif seg_num == 0:
+                # First segment - show topic
+                if st.session_state.config:
+                    topic_html = f"""
+                    <div style="padding: 1rem; background-color: rgba(99, 102, 241, 0.1); border-radius: 0.5rem; margin-bottom: 1rem;">
+                        <strong>Topic:</strong> {st.session_state.config.topic}
+                    </div>
+                    """
+                    st.markdown(topic_html, unsafe_allow_html=True)
+
+            # Show key insights relevant to this segment
+            if key_insights and seg_num > 0:
+                with st.expander("🔑 Key Insights from Prior Segments", expanded=True):
+                    st.markdown(key_insights)
+
+            # Render all turns in this segment
+            for turn in segments[seg_num]:
+                render_message(turn)
+else:
+    chat_container = st.container()
+    with chat_container:
+        st.info("Discussion will appear here...")
 
 # User chat input - always available when discussion is running
 if st.session_state.running and "orchestrator" in st.session_state:
@@ -487,6 +637,7 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
                 content=response["content"],
                 tool_calls=response.get("tool_calls", []),
                 tool_results=response.get("tool_results", []),
+                segment=orchestrator.current_segment,
             )
 
             # Record and broadcast
@@ -500,6 +651,9 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
             ):
                 await orchestrator._orchestrator_interjection()
 
+            # Check if we need to start a new segment (context overflow)
+            await orchestrator._check_and_start_new_segment()
+
             return turn
 
         # Run one turn
@@ -508,7 +662,8 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
         try:
             turn = loop.run_until_complete(run_single_turn())
             if turn:
-                st.session_state.turns.append(turn)
+                # Sync all turns from orchestrator (includes segment transitions)
+                st.session_state.turns = orchestrator.turns.copy()
         finally:
             loop.close()
 
@@ -559,8 +714,18 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
         # Rerun to show new message
         st.rerun()
 
+    # Format token count and segment info
+    tokens = getattr(orchestrator, 'total_tokens_used', 0)
+    if tokens >= 1000:
+        tokens_str = f"{tokens / 1000:.1f}k"
+    else:
+        tokens_str = str(tokens)
+
+    current_seg = getattr(orchestrator, 'current_segment', 0) + 1
+    total_segs = len(getattr(orchestrator, 'segments', [1]))
+
     status_text.text(
-        f"Turn {orchestrator.current_turn}/{orchestrator.config.max_turns} complete"
+        f"Turn {orchestrator.current_turn}/{orchestrator.config.max_turns} | Segment {current_seg}/{total_segs} | Tokens: {tokens_str}"
     )
 
 
@@ -571,7 +736,7 @@ if st.session_state.summary:
     st.divider()
     st.header("📊 Results")
 
-    cols = st.columns(4)
+    cols = st.columns(5)
     with cols[0]:
         st.metric("Total Turns", summary.total_turns)
     with cols[1]:
@@ -580,6 +745,19 @@ if st.session_state.summary:
         st.metric("Consensus", "✅ Yes" if summary.consensus_reached else "❌ No")
     with cols[3]:
         st.metric("Action Items", len(summary.action_items))
+    with cols[4]:
+        # Get token count from orchestrator if available
+        tokens = 0
+        if "orchestrator" in st.session_state and hasattr(st.session_state.orchestrator, 'total_tokens_used'):
+            tokens = st.session_state.orchestrator.total_tokens_used
+        elif hasattr(st.session_state, 'config') and st.session_state.config:
+            # Try to load from saved state
+            tokens = getattr(st.session_state, 'total_tokens', 0)
+        if tokens >= 1000:
+            tokens_str = f"{tokens / 1000:.1f}k"
+        else:
+            tokens_str = str(tokens)
+        st.metric("Tokens Used", tokens_str)
 
     cols = st.columns(2)
     with cols[0]:

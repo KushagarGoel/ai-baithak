@@ -148,6 +148,11 @@ Discussion rules:
 
                 content = response.choices[0].message.content or ""
 
+                # Track token usage from response
+                tokens_used = 0
+                if hasattr(response, 'usage') and response.usage:
+                    tokens_used = response.usage.total_tokens
+
                 # Check for tool calls in the response
                 tool_calls = self._extract_tool_calls(content)
 
@@ -200,6 +205,7 @@ Discussion rules:
                         "content": content,
                         "tool_calls": [],
                         "tool_results": [],
+                        "tokens_used": tokens_used,
                     }
                     self.add_message("assistant", content, self.config.name)
                     break
@@ -212,6 +218,7 @@ Discussion rules:
                     "tool_calls": [],
                     "tool_results": [],
                     "error": str(e),
+                    "tokens_used": 0,
                 }
 
         if final_response is None:
@@ -221,6 +228,7 @@ Discussion rules:
                 "content": "[Reached maximum tool iterations without final response]",
                 "tool_calls": [],
                 "tool_results": [],
+                "tokens_used": 0,
             }
 
         return final_response

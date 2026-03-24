@@ -329,7 +329,7 @@ def render_summary():
     st.markdown("---")
     st.header("📋 Discussion Summary")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
         st.subheader("Key Points")
@@ -350,6 +350,19 @@ def render_summary():
         st.subheader("Disagreements")
         for disagreement in summary.disagreements:
             st.markdown(f"- ⚠️ {disagreement}")
+
+    with col3:
+        st.subheader("Usage Stats")
+        # Get token count
+        tokens = 0
+        if "orchestrator" in st.session_state and hasattr(st.session_state.orchestrator, 'total_tokens_used'):
+            tokens = st.session_state.orchestrator.total_tokens_used
+        if tokens >= 1000:
+            tokens_str = f"{tokens / 1000:.1f}k"
+        else:
+            tokens_str = str(tokens)
+        st.metric("Total Tokens", tokens_str)
+        st.caption("Approximate token usage for this discussion")
 
     st.subheader("Final Recommendation")
     st.info(summary.final_recommendation or "No recommendation provided")
@@ -403,6 +416,18 @@ def main():
     # Render past turns if any
     if st.session_state.turns:
         st.header("💬 Discussion")
+
+        # Show token usage in a metric
+        tokens = 0
+        if "orchestrator" in st.session_state and hasattr(st.session_state.orchestrator, 'total_tokens_used'):
+            tokens = st.session_state.orchestrator.total_tokens_used
+        if tokens > 0:
+            if tokens >= 1000:
+                tokens_str = f"{tokens / 1000:.1f}k"
+            else:
+                tokens_str = str(tokens)
+            st.caption(f"💰 Tokens used: ~{tokens_str}")
+
         for turn in st.session_state.turns:
             render_message(turn)
 

@@ -53,6 +53,10 @@ class CouncilConfig:
     # Session ID for organizing files
     session_id: Optional[str] = None
 
+    # Context compression settings
+    context_compression_threshold: int = 40  # Trigger compression at this message count
+    context_summary_max_chars: int = 2000  # Max length of summary to inject
+
     @classmethod
     def create_default(
         cls, topic: str, max_duration_minutes: int = 10

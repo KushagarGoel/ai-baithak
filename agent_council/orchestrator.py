@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-from litellm import completion
+from litellm import completion, token_counter
 
 from .agent import AgentConfig, CouncilAgent
 from .config import CouncilConfig
@@ -27,6 +27,18 @@ class DiscussionTurn:
     timestamp: float = field(default_factory=time.time)
     tool_calls: list = field(default_factory=list)
     tool_results: list = field(default_factory=list)
+    segment: int = 0  # Which segment this turn belongs to
+
+
+@dataclass
+class DiscussionSegment:
+    """A segment of the discussion (like a sub-tab)."""
+
+    segment_number: int
+    start_turn: int
+    end_turn: Optional[int] = None
+    summary: str = ""  # Summary of prior discussion
+    orchestrator_message: str = ""  # The transition message
 
 
 @dataclass
@@ -52,9 +64,19 @@ class CouncilOrchestrator:
         self.tool_registry = ToolRegistry(config.workspace_path)
         self.agents: list[CouncilAgent] = []
         self.turns: list[DiscussionTurn] = []
+        self.segments: list[DiscussionSegment] = []
         self.start_time: Optional[float] = None
         self.current_turn = 0
+        self.total_tokens_used: int = 0
+        self.current_segment = 0
         self._setup_agents()
+        # Initialize first segment
+        self.segments.append(DiscussionSegment(
+            segment_number=0,
+            start_turn=1,
+            summary="",
+            orchestrator_message=""
+        ))
 
     def _setup_agents(self):
         """Initialize all council agents."""
@@ -115,6 +137,9 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
             # Get response from agent
             response = await speaker.think_and_respond(context)
 
+            # Track token usage
+            self.total_tokens_used += response.get("tokens_used", 0)
+
             # Record turn
             turn = DiscussionTurn(
                 turn_number=self.current_turn,
@@ -123,6 +148,7 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
                 content=response["content"],
                 tool_calls=response.get("tool_calls", []),
                 tool_results=response.get("tool_results", []),
+                segment=self.current_segment,
             )
             self.turns.append(turn)
 
@@ -135,6 +161,9 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
             # Progress callback
             if progress_callback:
                 await progress_callback(self.current_turn, self.config.max_turns, turn)
+
+            # Check if we need to start a new segment (context overflow)
+            await self._check_and_start_new_segment()
 
             # Orchestrator interjection
             if self.current_turn % self.config.orchestrator_frequency == 0:
@@ -168,6 +197,221 @@ Let's begin. Each of you will have a chance to share your initial thoughts."""
             return False
 
         return True
+
+    async def _check_and_start_new_segment(self) -> bool:
+        """
+        Check if any agent's context exceeds the threshold and start a new segment if needed.
+
+        When triggered, this will:
+        1. Close the current segment
+        2. Generate a summary of prior discussion
+        3. Create a new segment with orchestrator transition message
+        4. Reset all agents with fresh context
+
+        Returns:
+            True if new segment was started, False otherwise
+        """
+        threshold = self.config.context_compression_threshold
+
+        # Find agents that need new segment
+        agents_needing_reset = [
+            agent for agent in self.agents
+            if len(agent.messages) >= threshold
+        ]
+
+        if not agents_needing_reset:
+            return False
+
+        print(f"[SEGMENT TRANSITION] {len(agents_needing_reset)} agent(s) exceeded {threshold} messages. Starting new segment...")
+
+        # Start new segment
+        await self._start_new_segment()
+
+        return True
+
+    async def _start_new_segment(self):
+        """
+        Start a new discussion segment.
+
+        This generates a summary, closes the current segment, and creates
+        a fresh start for all agents with an orchestrator transition message.
+        """
+        # Generate summary of current segment
+        summary = await self._generate_segment_summary()
+
+        # Close current segment
+        current_seg = self.segments[self.current_segment]
+        current_seg.end_turn = self.current_turn
+        current_seg.summary = summary
+
+        # Create orchestrator transition message
+        transition_message = await self._generate_transition_message(summary)
+        current_seg.orchestrator_message = transition_message
+
+        # Create new segment
+        self.current_segment += 1
+        new_segment = DiscussionSegment(
+            segment_number=self.current_segment,
+            start_turn=self.current_turn + 1,
+            summary=summary,
+            orchestrator_message=transition_message
+        )
+        self.segments.append(new_segment)
+
+        print(f"[SEGMENT TRANSITION] Starting segment {self.current_segment} at turn {self.current_turn + 1}")
+
+        # Reset all agents with fresh context starting with orchestrator message
+        for agent in self.agents:
+            self._reset_agent_for_new_segment(agent, transition_message)
+
+        # Add transition as a turn in the new segment
+        turn = DiscussionTurn(
+            turn_number=self.current_turn + 0.5,  # Decimal to show it's interstitial
+            agent_name="Orchestrator",
+            persona="Manager",
+            content=transition_message,
+            segment=self.current_segment,
+        )
+        self.turns.append(turn)
+
+        print(f"[SEGMENT TRANSITION] All agents reset for new segment {self.current_segment}")
+
+    def _reset_agent_for_new_segment(self, agent: CouncilAgent, transition_message: str):
+        """
+        Reset an agent's message history for a new segment.
+
+        Keeps only the system message, adds the original topic, and adds the transition message as context.
+        """
+        from .agent import AgentMessage
+
+        # Keep only system message
+        system_message = None
+        for msg in agent.messages:
+            if msg.role == "system":
+                system_message = msg
+                break
+
+        # Build fresh message list
+        new_messages = []
+        if system_message:
+            new_messages.append(system_message)
+
+        # Add original topic as context
+        new_messages.append(AgentMessage(
+            role="user",
+            content=f"Original Topic: {self.config.topic}",
+            agent_name="User"
+        ))
+
+        # Add transition message as user message
+        new_messages.append(AgentMessage(
+            role="user",
+            content=transition_message,
+            agent_name="Orchestrator"
+        ))
+
+        # Replace agent's messages
+        old_count = len(agent.messages)
+        agent.messages = new_messages
+
+        print(f"[SEGMENT TRANSITION] {agent.config.name} reset: {old_count} -> {len(agent.messages)} messages")
+
+    async def _generate_segment_summary(self) -> str:
+        """Generate a summary of the discussion for context compression."""
+        # Get the last N turns to summarize (excluding system messages)
+        turns_to_summarize = self.turns[-20:] if len(self.turns) >= 20 else self.turns
+
+        if not turns_to_summarize:
+            return "No prior discussion."
+
+        # Build discussion text
+        discussion_text = "\n".join([
+            f"{t.agent_name}: {t.content[:500]}"  # Truncate individual messages
+            for t in turns_to_summarize
+        ])
+
+        prompt = f"""Summarize this council discussion concisely. Focus on:
+1. Key points and arguments made
+2. Any consensus or disagreements
+3. Important facts or insights shared
+
+Discussion:
+{discussion_text}
+
+Provide a brief summary (max {self.config.context_summary_max_chars} characters):"""
+
+        try:
+            # Determine model format for LiteLLM proxy
+            if (
+                self.config.litellm_proxy
+                and not self.config.orchestrator_model.startswith("openai/")
+            ):
+                model = f"openai/{self.config.orchestrator_model}"
+            else:
+                model = self.config.orchestrator_model
+
+            completion_kwargs = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 500,
+            }
+
+            if self.config.litellm_proxy:
+                completion_kwargs["api_base"] = self.config.litellm_proxy.api_base
+                completion_kwargs["api_key"] = self.config.litellm_proxy.api_key
+
+            response = completion(**completion_kwargs)
+
+            # Track token usage
+            if hasattr(response, 'usage') and response.usage:
+                self.total_tokens_used += response.usage.total_tokens
+
+            summary = response.choices[0].message.content.strip()
+
+            # Enforce max length
+            if len(summary) > self.config.context_summary_max_chars:
+                summary = summary[:self.config.context_summary_max_chars - 3] + "..."
+
+            return summary
+
+        except Exception as e:
+            print(f"[CONTEXT COMPRESSION] Failed to generate summary: {e}")
+            # Fallback: create a simple summary from turns
+            return self._generate_simple_summary(turns_to_summarize)
+
+    def _generate_simple_summary(self, turns: list[DiscussionTurn]) -> str:
+        """Generate a simple summary without LLM call (fallback)."""
+        key_points = []
+        for t in turns[-10:]:  # Last 10 turns
+            content = t.content[:200]
+            key_points.append(f"- {t.agent_name}: {content}...")
+
+        summary = "Discussion Summary:\n" + "\n".join(key_points)
+
+        # Truncate if too long
+        if len(summary) > self.config.context_summary_max_chars:
+            summary = summary[:self.config.context_summary_max_chars - 3] + "..."
+
+        return summary
+
+    async def _generate_transition_message(self, summary: str) -> str:
+        """
+        Generate a concise transition message for a new segment.
+
+        This is a lightweight summary - key insights are saved to file.
+        """
+        # Simple, concise transition without another LLM call
+        return f"""[SEGMENT {self.current_segment + 1} - CONTINUED DISCUSSION]
+
+**Original Topic:** {self.config.topic}
+
+**What We've Covered:**
+{summary[:800]}...
+
+**Key Insights File:** Check `key_insights.md` in the session folder for detailed findings.
+
+Continue the discussion from here, building on prior points while staying true to your persona."""
 
     def _select_next_speaker(self) -> Optional[CouncilAgent]:
         """Select which agent speaks next."""
@@ -307,6 +551,10 @@ If no particularly important insights, return {{"insights": []}}"""
 
             response = completion(**completion_kwargs)
 
+            # Track token usage
+            if hasattr(response, 'usage') and response.usage:
+                self.total_tokens_used += response.usage.total_tokens
+
             orchestrator_message = response.choices[0].message.content
 
             # Add as a turn
@@ -316,6 +564,7 @@ If no particularly important insights, return {{"insights": []}}"""
                 agent_name="Orchestrator",
                 persona="Manager",
                 content=orchestrator_message,
+                segment=self.current_segment,
             )
             self.turns.append(turn)
 
@@ -336,6 +585,11 @@ If no particularly important insights, return {{"insights": []}}"""
                     insights_kwargs["api_key"] = self.config.litellm_proxy.api_key
 
                 insights_response = completion(**insights_kwargs)
+
+                # Track token usage
+                if hasattr(insights_response, 'usage') and insights_response.usage:
+                    self.total_tokens_used += insights_response.usage.total_tokens
+
                 insights_content = insights_response.choices[0].message.content
 
                 # Parse JSON
@@ -434,6 +688,11 @@ If no particularly important insights, return {{"insights": []}}"""
                 completion_kwargs["api_key"] = self.config.litellm_proxy.api_key
 
             response = completion(**completion_kwargs)
+
+            # Track token usage
+            if hasattr(response, 'usage') and response.usage:
+                self.total_tokens_used += response.usage.total_tokens
+
             insights_content = response.choices[0].message.content
 
             # Parse JSON
