@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -rf /Users/kushagar.goel/code/my_projects/agent-council/agent_council)",
+      "Bash(rm -f /Users/kushagar.goel/code/my_projects/agent-council/example.py /Users/kushagar.goel/code/my_projects/agent-council/requirements.txt)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
