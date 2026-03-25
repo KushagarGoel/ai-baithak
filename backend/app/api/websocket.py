@@ -40,14 +40,19 @@ class DiscussionManager:
         logger.info(f"[WebSocket] Disconnecting session: {session_id}")
         if session_id in self.connections:
             try:
-                # Don't close here - just remove from tracking
-                pass
+                # Signal orchestrator to stop
+                self.stop_discussion(session_id)
             except Exception as e:
                 logger.error(f"[WebSocket] Error during disconnect cleanup: {e}")
             finally:
                 del self.connections[session_id]
+
+    def stop_discussion(self, session_id: str):
+        """Signal orchestrator to stop a discussion."""
         if session_id in self.active_discussions:
-            del self.active_discussions[session_id]
+            orchestrator = self.active_discussions[session_id]
+            orchestrator.stop()
+            logger.info(f"[WebSocket] Signaled orchestrator to stop for {session_id}")
 
     async def start_discussion(self, session_id: str, config: CouncilConfig):
         """Start or resume a discussion."""
@@ -92,6 +97,11 @@ class DiscussionManager:
 
         try:
             while orchestrator._should_continue():
+                # Check if client is still connected
+                if session_id not in self.connections:
+                    logger.info(f"[WebSocket] Client disconnected, stopping discussion for {session_id}")
+                    break
+
                 logger.debug(f"[WebSocket] Running turn {orchestrator.current_turn + 1} for {session_id}")
 
                 # Run single turn
@@ -180,6 +190,7 @@ class DiscussionManager:
             # Handle insights update - data is a dict with "insights" and "total_count"
             insights_data = data.get("insights", [])
             total_count = data.get("total_count", len(insights_data))
+            logger.info(f"[WebSocket] Sending {len(insights_data)} insights to client for session {session_id}")
             await self._send_message(session_id, {
                 "type": "insights",
                 "insights": [insight.model_dump() for insight in insights_data],
@@ -223,11 +234,13 @@ class DiscussionManager:
         if websocket:
             try:
                 await websocket.send_json(message)
-                logger.debug(f"[WebSocket] Sent {message.get('type')} to {session_id}")
+                logger.info(f"[WebSocket] Sent {message.get('type')} to {session_id}, insights count: {len(message.get('insights', []))}")
             except Exception as e:
                 logger.error(f"[WebSocket] Failed to send message to {session_id}: {e}")
                 # Connection is likely broken, clean it up
                 self.disconnect(session_id)
+        else:
+            logger.warning(f"[WebSocket] No connection found for {session_id}")
 
 
 # Global discussion manager
@@ -276,6 +289,17 @@ async def handle_websocket(websocket: WebSocket, session_id: str):
                     await manager.handle_user_message(session_id, data.get("content", ""))
                 except Exception as e:
                     logger.error(f"[WebSocket] Error handling message: {e}")
+                    await websocket.send_json({"type": "error", "error": str(e)})
+
+            elif msg_type == "stop":
+                try:
+                    logger.info(f"[WebSocket] Stop requested for: {session_id}")
+                    manager.stop_discussion(session_id)
+                    await websocket.send_json({"type": "stopped", "message": "Discussion stopping..."})
+                except Exception as e:
+                    logger.error(f"[WebSocket] Error stopping discussion: {e}")
+                    import traceback
+                    traceback.print_exc()
                     await websocket.send_json({"type": "error", "error": str(e)})
 
             elif msg_type == "ping":

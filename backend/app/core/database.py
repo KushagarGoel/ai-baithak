@@ -14,9 +14,11 @@ class SessionDatabase:
     """SQLite database for storing discussion sessions."""
 
     def __init__(self, db_path: str = "chats/sessions.db"):
-        self.db_path = db_path
-        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        self.db_path = os.path.abspath(db_path)
+        print(f"[DB] Initializing database at: {self.db_path}")
+        os.makedirs(os.path.dirname(self.db_path), exist_ok=True)
         self._init_db()
+        print(f"[DB] Database initialized")
 
     def _init_db(self):
         """Initialize database tables."""
@@ -218,12 +220,15 @@ class SessionDatabase:
 
     def session_exists(self, session_id: str) -> bool:
         """Check if a session exists."""
+        print(f"[DB] Checking if session exists: {session_id}")
         with self._get_conn() as conn:
             row = conn.execute(
                 "SELECT 1 FROM sessions WHERE session_id = ?",
                 (session_id,)
             ).fetchone()
-            return row is not None
+            exists = row is not None
+            print(f"[DB] Session {session_id} exists: {exists}")
+            return exists
 
     def save_session_full(self, session_id: str, topic: str, config: CouncilConfig,
                           turns: list[DiscussionTurn], segments: list[DiscussionSegment],

@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import time
 import random
 from datetime import datetime
@@ -40,6 +41,7 @@ class CouncilOrchestrator:
         self.segment_tokens_used = 0  # Tokens used in current segment only
         self._pending_segment_transition = False
         self._last_saved_turn = 0  # Track last turn saved to database
+        self._stop_requested = False  # Flag to stop discussion
         self._setup_agents()
 
         # Try to load existing session
@@ -204,6 +206,9 @@ class CouncilOrchestrator:
 
     def _should_continue(self) -> bool:
         """Determine if discussion should continue."""
+        if self._stop_requested:
+            return False
+
         if self.start_time is None:
             return True
 
@@ -218,6 +223,11 @@ class CouncilOrchestrator:
             return False
 
         return True
+
+    def stop(self):
+        """Request to stop the discussion."""
+        print(f"[ORCHESTRATOR] Stop requested for session {self.config.session_id}")
+        self._stop_requested = True
 
     async def run_discussion(self, progress_callback=None):
         """Run the full council discussion."""
@@ -287,7 +297,7 @@ Let's begin."""
                 await self._orchestrator_interjection(progress_callback)
 
         # Generate summary
-        summary = await self._generate_summary(start_datetime)
+        summary = await self._generate_summary(datetime.fromtimestamp(start_datetime) if isinstance(start_datetime, (int, float)) else start_datetime)
 
         # Save transcript
         if self.config.save_transcript:
@@ -686,13 +696,14 @@ Analyze this discussion segment and identify 3-5 key insights worth preserving:
 
 {discussion_text}
 
-Requirements:
-- Extract only substantive insights, arguments, or findings
-- Each insight must be a single clear sentence
-- Return ONLY valid JSON, no markdown, no explanations
+To save these insights, you MUST use the save_insights tool with this exact format:
 
-Your response must be ONLY this JSON format:
-{{"insights": ["First insight here", "Second insight here", "Third insight here"]}}"""
+{{"tool_calls": [{{"name": "save_insights", "arguments": {{"insights": ["Insight 1 sentence", "Insight 2 sentence", "Insight 3 sentence"]}}}}]}}
+
+Requirements:
+- Extract 3-5 substantive insights, arguments, or findings
+- Each insight must be a single clear sentence
+- Use ONLY the tool_calls format above, no other text"""
 
         try:
             model = self._get_orchestrator_model()
@@ -714,41 +725,38 @@ Your response must be ONLY this JSON format:
             if hasattr(response, 'usage') and response.usage:
                 self.total_tokens_used += response.usage.total_tokens
 
-            # Parse JSON response - try multiple approaches
+            # Parse using tool_calls format (same as agent tool calls)
             insights_list = []
             try:
-                import re
-                # Try to find JSON object with insights key
-                json_match = re.search(r'\{[^}]*"insights"[^}]*\}', insights_content, re.DOTALL)
-                print(f"[KEY INSIGHTS DEBUG] JSON regex match: {json_match is not None}")
-
-                if json_match:
-                    parsed = json.loads(json_match.group(0))
-                    insights_list = parsed.get("insights", [])
-                else:
-                    # Try to parse entire response as JSON
+                # First try direct JSON parse (if content is clean)
+                try:
                     parsed = json.loads(insights_content)
-                    insights_list = parsed.get("insights", [])
+                    if "tool_calls" in parsed:
+                        for call in parsed["tool_calls"]:
+                            if call.get("name") == "save_insights":
+                                insights_list = call.get("arguments", {}).get("insights", [])
+                                print(f"[KEY INSIGHTS DEBUG] Found {len(insights_list)} insights via direct JSON parse")
+                                break
+                except json.JSONDecodeError:
+                    pass
 
-                print(f"[KEY INSIGHTS DEBUG] Parsed insights count: {len(insights_list)}")
-            except (json.JSONDecodeError, AttributeError) as e:
-                print(f"[KEY INSIGHTS DEBUG] JSON parse error: {e}, using fallback")
-                # Fallback: extract lines that look like insights (bullet points or quoted strings)
-                lines = insights_content.split('\n')
-                for line in lines:
-                    line = line.strip()
-                    # Look for bullet points, numbers, or quoted strings
-                    if line and not line.startswith('{') and not line.startswith('}'):
-                        # Remove common prefixes
-                        line = re.sub(r'^[-*•\d.\)\]]+\s*', '', line)
-                        # Remove quotes
-                        line = line.strip('"\'')
-                        if line and len(line) > 20:  # Must be substantial
-                            insights_list.append(line)
-                print(f"[KEY INSIGHTS DEBUG] Fallback extracted {len(insights_list)} insights")
+                # If no insights yet, try regex extraction
+                if not insights_list:
+                    tool_calls = self._extract_tool_calls(insights_content)
+                    print(f"[KEY INSIGHTS DEBUG] Extracted {len(tool_calls)} tool calls via regex")
+
+                    for call in tool_calls:
+                        if call.get("name") == "save_insights":
+                            args = call.get("arguments", {})
+                            insights_list = args.get("insights", [])
+                            print(f"[KEY INSIGHTS DEBUG] Found {len(insights_list)} insights in tool call")
+                            break
+
+            except Exception as e:
+                print(f"[KEY INSIGHTS DEBUG] Parse error: {e}")
 
             if not insights_list:
-                print(f"[KEY INSIGHTS DEBUG] No insights found in response, raw content: {insights_content[:500]}")
+                print(f"[KEY INSIGHTS DEBUG] No insights found, raw content: {insights_content[:1000]}")
                 return
 
             print(f"[KEY INSIGHTS DEBUG] Saving {len(insights_list)} insights to database")
@@ -879,6 +887,27 @@ Provide a JSON response with:
         if self.config.litellm_proxy and not self.config.orchestrator_model.startswith("openai/"):
             return f"openai/{self.config.orchestrator_model}"
         return self.config.orchestrator_model
+
+    def _extract_tool_calls(self, content: str) -> list[dict]:
+        """Extract tool calls from response content (same as agent)."""
+        tool_calls = []
+        try:
+            # Try to find the full JSON object with tool_calls
+            # Use DOTALL to match across newlines
+            pattern = r'\{\s*"tool_calls"\s*:\s*\[.*?\]\s*\}'
+            match = re.search(pattern, content, re.DOTALL)
+            if match:
+                parsed = json.loads(match.group(0))
+                if "tool_calls" in parsed and isinstance(parsed["tool_calls"], list):
+                    tool_calls = parsed["tool_calls"]
+                    print(f"[KEY INSIGHTS DEBUG] Found {len(tool_calls)} tool calls in content")
+            else:
+                print(f"[KEY INSIGHTS DEBUG] No tool_calls pattern match in content: {content[:200]}...")
+        except json.JSONDecodeError as e:
+            print(f"[KEY INSIGHTS DEBUG] JSON parse error: {e}, content: {content[:200]}...")
+        except re.error as e:
+            print(f"[KEY INSIGHTS DEBUG] Regex error: {e}")
+        return tool_calls
 
     def _save_transcript(self):
         """Save the discussion transcript."""

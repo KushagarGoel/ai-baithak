@@ -43,6 +43,7 @@ export interface DiscussionTurn {
   timestamp: number;
   tool_calls: ToolCall[];
   tool_results: ToolResult[];
+  thinking?: string;  // Agent's reasoning/thinking process
   segment: number;
 }
 

@@ -66,7 +66,7 @@ export function DiscussionPanel() {
     const fetchInsights = async () => {
       if (!config.session_id) return;
       try {
-        const response = await fetch(`http://localhost:11111/sessions/${config.session_id}/insights`);
+        const response = await fetch(`http://localhost:11111/api/sessions/${config.session_id}/insights`);
         if (response.ok) {
           const data = await response.json();
           if (data.insights && data.insights.length > 0) {
@@ -158,6 +158,7 @@ export function DiscussionPanel() {
 
             case 'insights':
               // Add new insights from WebSocket
+              console.log('[WebSocket] Received insights:', data.insights?.length, data.insights);
               if (data.insights && data.insights.length > 0) {
                 addInsights(data.insights);
                 // If panel is closed, increment new insights count
@@ -296,11 +297,30 @@ export function DiscussionPanel() {
               </span>
             </p>
           </div>
-          <StatusIndicator
-            status={currentStatus}
-            currentAgent={orchestratorState.current_agent}
-            progressEvent={progressEvent}
-          />
+          <div className="flex items-center gap-3">
+            {orchestratorState.is_running && (
+              <button
+                onClick={() => {
+                  console.log('[Stop Button] Clicked, ws state:', wsRef.current?.readyState);
+                  if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(JSON.stringify({ type: 'stop' }));
+                    console.log('[Stop Button] Stop message sent');
+                    alert('Stop requested. Current turn will complete before stopping.');
+                  } else {
+                    console.error('[Stop Button] WebSocket not open, state:', wsRef.current?.readyState);
+                  }
+                }}
+                className="px-4 py-2 bg-error text-on-error rounded-lg font-medium hover:bg-error-dim transition-colors"
+              >
+                Stop
+              </button>
+            )}
+            <StatusIndicator
+              status={currentStatus}
+              currentAgent={orchestratorState.current_agent}
+              progressEvent={progressEvent}
+            />
+          </div>
         </div>
       </div>
 

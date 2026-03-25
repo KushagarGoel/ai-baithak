@@ -3,6 +3,7 @@
 import { DiscussionTurn, PERSONA_COLORS } from '@/types';
 import { formatTimestamp } from '@/lib/utils';
 import { Card } from '@/components/ui/Card';
+import { ThinkingPanel } from './ThinkingPanel';
 
 interface MessageCardProps {
   turn: DiscussionTurn;
@@ -64,30 +65,9 @@ export function MessageCard({ turn }: MessageCardProps) {
         {turn.content}
       </div>
 
-      {/* Tool calls */}
-      {turn.tool_calls && turn.tool_calls.length > 0 && (
-        <div className="mt-4 p-3 bg-surface-container-lowest rounded-lg">
-          <p className="text-label-sm text-on-surface-variant mb-2">Tool Calls:</p>
-          {turn.tool_calls.map((call, idx) => (
-            <div key={idx} className="font-mono text-label-sm text-primary">
-              {call.name}({JSON.stringify(call.arguments)})
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Tool results */}
-      {turn.tool_results && turn.tool_results.length > 0 && (
-        <div className="mt-2 p-3 bg-surface-container-lowest rounded-lg">
-          <p className="text-label-sm text-on-surface-variant mb-2">Results:</p>
-          {turn.tool_results.map((result, idx) => (
-            <div key={idx} className="font-mono text-label-sm">
-              <span className={result.success ? 'text-secondary' : 'text-error'}>
-                {result.success ? '✓' : '✗'} {result.tool}
-              </span>
-            </div>
-          ))}
-        </div>
+      {/* Thinking Panel - shows reasoning and tools */}
+      {!isOrchestrator && !isUser && (
+        <ThinkingPanel turn={turn} />
       )}
 
       {/* Segment indicator */}

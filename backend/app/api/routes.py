@@ -193,7 +193,20 @@ async def save_session(session_id: str, session_data: dict):
 @router.get("/sessions/{session_id}/insights")
 async def get_session_insights(session_id: str, segment: Optional[int] = Query(None)):
     """Get key insights for a session."""
+    print(f"[API] Getting insights for session: {session_id}, segment: {segment}")
     try:
+        # Check if session exists
+        exists = db.session_exists(session_id)
+        print(f"[API] Session exists: {exists}")
+        if not exists:
+            # Return empty insights for non-existent session
+            print(f"[API] Session {session_id} not found, returning empty")
+            return {
+                "insights": [],
+                "total_count": 0,
+                "session_id": session_id,
+            }
+
         insights_data = db.get_insights(session_id, segment)
         insights = [
             KeyInsight(
@@ -214,4 +227,11 @@ async def get_session_insights(session_id: str, segment: Optional[int] = Query(N
             "session_id": session_id,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get insights: {str(e)}")
+        print(f"[API ERROR] Failed to get insights for {session_id}: {e}")
+        # Return empty insights on error instead of 500
+        return {
+            "insights": [],
+            "total_count": 0,
+            "session_id": session_id,
+            "error": str(e),
+        }
