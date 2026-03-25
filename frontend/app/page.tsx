@@ -6,6 +6,7 @@ import { ConfigPanel } from '@/components/config/ConfigPanel';
 import { DiscussionPanel } from '@/components/discussion/DiscussionPanel';
 import { SessionsPanel } from '@/components/sessions/SessionsPanel';
 import { ArchivesPanel } from '@/components/archives/ArchivesPanel';
+import { ReportPanel } from '@/components/report/ReportPanel';
 import { useCouncilStore } from '@/stores/councilStore';
 
 export default function Home() {
@@ -25,6 +26,7 @@ export default function Home() {
           {viewMode === 'discussion' && <DiscussionPanel />}
           {viewMode === 'sessions' && <SessionsPanel />}
           {viewMode === 'archives' && <ArchivesPanel />}
+          {viewMode === 'report' && <ReportPanel />}
         </main>
       </div>
     </div>

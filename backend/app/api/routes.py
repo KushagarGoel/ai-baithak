@@ -235,3 +235,76 @@ async def get_session_insights(session_id: str, segment: Optional[int] = Query(N
             "session_id": session_id,
             "error": str(e),
         }
+
+
+@router.get("/sessions/{session_id}/report")
+async def get_session_report(session_id: str):
+    """Get the comprehensive solutioning report for a completed session."""
+    try:
+        session_data = db.load_session_full(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Parse summary JSON if exists
+        summary_data = {}
+        if session_data.get('summary'):
+            try:
+                summary_data = json.loads(session_data['summary'])
+            except json.JSONDecodeError:
+                pass
+
+        # If no summary or summary is minimal, return 404
+        if not summary_data:
+            raise HTTPException(status_code=404, detail="Report not yet generated for this session")
+
+        # Parse config for agent info
+        config = session_data.get('config', {})
+        if isinstance(config, str):
+            config = json.loads(config)
+
+        # Build the comprehensive report
+        report = {
+            "session_id": session_id,
+            "topic": summary_data.get('topic', session_data.get('topic', 'Unknown Topic')),
+            "status": session_data.get('status', 'unknown'),
+            "start_time": summary_data.get('start_time', session_data.get('start_time')),
+            "end_time": summary_data.get('end_time', session_data.get('end_time')),
+            "total_turns": summary_data.get('total_turns', session_data.get('current_turn', 0)),
+
+            # Problem & Solution Overview
+            "problem_statement": summary_data.get('problem_statement', ''),
+            "final_answer": summary_data.get('final_answer', ''),
+            "justification": summary_data.get('justification', ''),
+            "final_recommendation": summary_data.get('final_recommendation', ''),
+
+            # Solution Options
+            "solution_options": summary_data.get('solution_options', []),
+            "selected_solution": summary_data.get('selected_solution'),
+            "selection_reasoning": summary_data.get('selection_reasoning', ''),
+
+            # Implementation & Risks
+            "implementation_steps": summary_data.get('implementation_steps', []),
+            "risks_and_mitigations": summary_data.get('risks_and_mitigations', []),
+            "action_items": summary_data.get('action_items', []),
+
+            # Consensus & Disagreements
+            "consensus_reached": summary_data.get('consensus_reached', False),
+            "key_points": summary_data.get('key_points', []),
+            "disagreements": summary_data.get('disagreements', []),
+
+            # Segment Reports
+            "segment_reports": summary_data.get('segment_reports', []),
+
+            # Agent Analyses
+            "agent_analyses": summary_data.get('agent_analyses', []),
+
+            # Raw turns data for reference
+            "turns": session_data.get('turns', []),
+            "segments": session_data.get('segments', []),
+        }
+
+        return report
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")

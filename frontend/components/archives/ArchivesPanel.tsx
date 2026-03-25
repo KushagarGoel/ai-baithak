@@ -206,11 +206,14 @@ export function ArchivesPanel() {
       ) : (
         <div className="grid gap-4">
           {archives.map((archive) => (
-            <Card
+            <div
               key={archive.id}
-              variant="elevated"
-              className="cursor-pointer hover:bg-surface-container/50 transition-colors"
               onClick={() => setSelectedArchive(archive)}
+              className="cursor-pointer"
+            >
+            <Card
+              variant="elevated"
+              className="hover:bg-surface-container/50 transition-colors"
             >
               <CardContent className="p-6">
                 <div className="flex items-start justify-between">
@@ -255,6 +258,7 @@ export function ArchivesPanel() {
                 </div>
               </CardContent>
             </Card>
+            </div>
           ))}
         </div>
       )}

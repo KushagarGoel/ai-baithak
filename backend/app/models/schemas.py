@@ -73,17 +73,67 @@ class DiscussionSegment(BaseModel):
     orchestrator_message: str = ""
 
 
+class AgentAnalysis(BaseModel):
+    """Analysis of a single agent's contribution."""
+    agent_name: str
+    persona: str
+    critical_points: list[str]
+    key_arguments: list[str]
+    tools_used: list[str] = Field(default_factory=list)
+    stance: str = ""  # e.g., "supportive", "opposed", "neutral", "skeptical"
+
+
+class SolutionOption(BaseModel):
+    """A potential solution option discussed."""
+    option_name: str
+    description: str
+    pros: list[str]
+    cons: list[str]
+    supporters: list[str]  # Agent names who supported this
+    opposers: list[str]   # Agent names who opposed this
+
+
+class SegmentReport(BaseModel):
+    """Detailed report for a discussion segment."""
+    segment_number: int
+    summary: str
+    key_developments: list[str]
+    agent_contributions: dict[str, str]  # agent_name -> summary of contribution
+    decisions_made: list[str]
+    open_questions: list[str]
+
+
 class DiscussionSummary(BaseModel):
-    """Summary of a completed discussion."""
+    """Comprehensive solutioning document for a completed discussion."""
     topic: str
     start_time: str
     end_time: str
     total_turns: int
+
+    # Overall analysis
     key_points: list[str]
     consensus_reached: bool
     disagreements: list[str]
     action_items: list[str]
+
+    # Detailed solution breakdown
+    problem_statement: str = ""
+    solution_options: list[SolutionOption] = Field(default_factory=list)
+    selected_solution: Optional[str] = None
+    selection_reasoning: str = ""
+
+    # Per-segment analysis
+    segment_reports: list[SegmentReport] = Field(default_factory=list)
+
+    # Agent analysis
+    agent_analyses: list[AgentAnalysis] = Field(default_factory=list)
+
+    # Final conclusion
     final_recommendation: Optional[str] = None
+    final_answer: str = ""
+    justification: str = ""
+    implementation_steps: list[str] = Field(default_factory=list)
+    risks_and_mitigations: list[str] = Field(default_factory=list)
 
 
 class OrchestratorState(BaseModel):

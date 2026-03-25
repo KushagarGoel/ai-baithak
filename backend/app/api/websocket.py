@@ -4,6 +4,7 @@ import json
 import asyncio
 import logging
 import time
+from datetime import datetime
 from typing import Optional
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -123,7 +124,8 @@ class DiscussionManager:
 
             # Discussion complete
             logger.info(f"[WebSocket] Discussion complete for session: {session_id}")
-            summary = await orchestrator._generate_summary(orchestrator.start_time)
+            start_datetime = datetime.fromtimestamp(orchestrator.start_time) if orchestrator.start_time else datetime.now()
+            summary = await orchestrator._generate_summary(start_datetime)
 
             # Save final session state to SQLite with completed status
             if orchestrator.config.session_id:

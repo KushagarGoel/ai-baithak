@@ -4,6 +4,7 @@ import {
   DiscussionTurn,
   DiscussionSegment,
   DiscussionSummary,
+  ComprehensiveReport,
   Session,
   OrchestratorState,
   ViewMode,
@@ -44,11 +45,19 @@ interface CouncilState {
   currentSessionId: string | null;
   setCurrentSessionId: (id: string | null) => void;
 
+  // Comprehensive Report
+  comprehensiveReport: ComprehensiveReport | null;
+  setComprehensiveReport: (report: ComprehensiveReport | null) => void;
+
   // WebSocket
   wsConnection: WebSocket | null;
   setWsConnection: (ws: WebSocket | null) => void;
   wsStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
   setWsStatus: (status: 'disconnected' | 'connecting' | 'connected' | 'error') => void;
+
+  // Discussion state
+  discussionStatus: 'idle' | 'running' | 'completed' | 'error';
+  setDiscussionStatus: (status: 'idle' | 'running' | 'completed' | 'error') => void;
 }
 
 const defaultConfig: CouncilConfig = {
@@ -78,6 +87,7 @@ const defaultOrchestratorState: OrchestratorState = {
   max_turns: 15,
   current_segment: 0,
   total_segments: 1,
+  segment_tokens: 0,
   total_tokens: 0,
   is_running: false,
   status: 'idle',
@@ -163,9 +173,17 @@ export const useCouncilStore = create<CouncilState>((set, get) => ({
   currentSessionId: null,
   setCurrentSessionId: (id) => set({ currentSessionId: id }),
 
+  // Comprehensive Report
+  comprehensiveReport: null,
+  setComprehensiveReport: (report) => set({ comprehensiveReport: report }),
+
   // WebSocket
   wsConnection: null,
   setWsConnection: (ws) => set({ wsConnection: ws }),
   wsStatus: 'disconnected',
   setWsStatus: (status) => set({ wsStatus: status }),
+
+  // Discussion state
+  discussionStatus: 'idle',
+  setDiscussionStatus: (status) => set({ discussionStatus: status }),
 }));

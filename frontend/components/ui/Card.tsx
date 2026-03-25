@@ -1,16 +1,17 @@
 'use client';
 
 import { cn } from '@/lib/utils';
-import { ReactNode } from 'react';
+import { ReactNode, CSSProperties } from 'react';
 
 interface CardProps {
   children: ReactNode;
   className?: string;
   variant?: 'default' | 'elevated' | 'glass';
   padding?: 'none' | 'sm' | 'md' | 'lg';
+  style?: CSSProperties;
 }
 
-export function Card({ children, className, variant = 'default', padding = 'md' }: CardProps) {
+export function Card({ children, className, variant = 'default', padding = 'md', style }: CardProps) {
   const variants = {
     default: 'bg-surface-container-low',
     elevated: 'bg-surface-container-high shadow-ambient',
@@ -25,12 +26,15 @@ export function Card({ children, className, variant = 'default', padding = 'md' 
   };
 
   return (
-    <div className={cn(
-      'rounded-xl',
-      variants[variant],
-      paddings[padding],
-      className
-    )}>
+    <div
+      className={cn(
+        'rounded-xl',
+        variants[variant],
+        paddings[padding],
+        className
+      )}
+      style={style}
+    >
       {children}
     </div>
   );

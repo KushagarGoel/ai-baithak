@@ -10,6 +10,8 @@ const NAV_ITEMS: { label: string; mode: ViewMode; icon: string }[] = [
   { label: 'Archives', mode: 'archives', icon: '📚' },
 ];
 
+// Report is accessible from Sessions/Archives tabs, not main nav
+
 export function Header() {
   const { viewMode, setViewMode, orchestratorState } = useCouncilStore();
 

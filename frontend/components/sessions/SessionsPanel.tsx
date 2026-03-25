@@ -5,12 +5,12 @@ import { useCouncilStore } from '@/stores/councilStore';
 import { Session, DiscussionTurn, CouncilConfig } from '@/types';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
-import { formatDate, formatTokens, truncate } from '@/lib/utils';
+import { formatDate, formatTokens, truncate, API_BASE_URL } from '@/lib/utils';
 
 export function SessionsPanel() {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [loading, setLoading] = useState(true);
-  const { setViewMode, setCurrentSessionId, resetDiscussion, updateConfig } = useCouncilStore();
+  const { setViewMode, setCurrentSessionId, resetDiscussion, updateConfig, setComprehensiveReport } = useCouncilStore();
 
   useEffect(() => {
     fetchSessions();
@@ -59,6 +59,121 @@ export function SessionsPanel() {
     } catch (error) {
       console.error('Failed to delete session:', error);
     }
+  };
+
+  const viewReport = async (sessionId: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/report`);
+      if (!response.ok) {
+        alert('Report not available yet. Wait for discussion to complete.');
+        return;
+      }
+      const report = await response.json();
+      setComprehensiveReport(report);
+      setCurrentSessionId(sessionId);
+      setViewMode('report');
+    } catch (error) {
+      console.error('Failed to load report:', error);
+      alert('Failed to load report');
+    }
+  };
+
+  const downloadReportPDF = async (sessionId: string, topic: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/report`);
+      if (!response.ok) {
+        alert('Report not available yet. Wait for discussion to complete.');
+        return;
+      }
+      const report = await response.json();
+
+      // Generate PDF content
+      const pdfContent = generatePDFContent(report);
+      const blob = new Blob([pdfContent], { type: 'text/html' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `report-${sessionId}.html`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      console.error('Failed to download report:', error);
+      alert('Failed to download report');
+    }
+  };
+
+  const generatePDFContent = (report: any) => {
+    return `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Solutioning Report - ${report.topic}</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
+    h1 { color: #333; border-bottom: 2px solid #333; padding-bottom: 10px; }
+    h2 { color: #555; margin-top: 30px; }
+    h3 { color: #666; }
+    .section { margin: 20px 0; padding: 15px; background: #f5f5f5; border-radius: 8px; }
+    .highlight { background: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
+    ul { line-height: 1.8; }
+    .meta { color: #888; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h1>Solutioning Report</h1>
+  <p class="meta">Topic: ${report.topic}</p>
+  <p class="meta">Date: ${new Date(report.end_time).toLocaleString()}</p>
+  <p class="meta">Turns: ${report.total_turns}</p>
+
+  <div class="section">
+    <h2>Problem Statement</h2>
+    <p>${report.problem_statement || 'N/A'}</p>
+  </div>
+
+  <div class="highlight">
+    <h2>Final Answer</h2>
+    <p>${report.final_answer || 'N/A'}</p>
+  </div>
+
+  <div class="section">
+    <h2>Justification</h2>
+    <p>${report.justification || 'N/A'}</p>
+  </div>
+
+  ${report.solution_options?.length ? `
+  <div class="section">
+    <h2>Solution Options</h2>
+    ${report.solution_options.map((opt: any) => `
+      <h3>${opt.option_name} ${opt.option_name === report.selected_solution ? '(Selected)' : ''}</h3>
+      <p>${opt.description}</p>
+      <p><strong>Pros:</strong> ${opt.pros.join(', ')}</p>
+      <p><strong>Cons:</strong> ${opt.cons.join(', ')}</p>
+    `).join('')}
+  </div>
+  ` : ''}
+
+  ${report.implementation_steps?.length ? `
+  <div class="section">
+    <h2>Implementation Steps</h2>
+    <ol>
+      ${report.implementation_steps.map((step: string) => `<li>${step}</li>`).join('')}
+    </ol>
+  </div>
+  ` : ''}
+
+  ${report.action_items?.length ? `
+  <div class="section">
+    <h2>Action Items</h2>
+    <ul>
+      ${report.action_items.map((item: string) => `<li>${item}</li>`).join('')}
+    </ul>
+  </div>
+  ` : ''}
+</body>
+</html>`;
   };
 
   if (loading) {
@@ -123,6 +238,20 @@ export function SessionsPanel() {
                       onClick={() => loadSession(session.id)}
                     >
                       Continue
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => viewReport(session.id)}
+                    >
+                      Report
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => downloadReportPDF(session.id, session.topic)}
+                    >
+                      Download
                     </Button>
                     <Button
                       variant="ghost"

@@ -78,6 +78,70 @@ export interface DiscussionSummary {
   disagreements: string[];
   action_items: string[];
   final_recommendation?: string;
+  // Extended comprehensive report fields
+  problem_statement?: string;
+  solution_options?: SolutionOption[];
+  selected_solution?: string;
+  selection_reasoning?: string;
+  segment_reports?: SegmentReport[];
+  agent_analyses?: AgentAnalysis[];
+  final_answer?: string;
+  justification?: string;
+  implementation_steps?: string[];
+  risks_and_mitigations?: string[];
+}
+
+export interface SolutionOption {
+  option_name: string;
+  description: string;
+  pros: string[];
+  cons: string[];
+  supporters: string[];
+  opposers: string[];
+}
+
+export interface SegmentReport {
+  segment_number: number;
+  summary: string;
+  key_developments: string[];
+  agent_contributions: Record<string, string>;
+  decisions_made: string[];
+  open_questions: string[];
+}
+
+export interface AgentAnalysis {
+  agent_name: string;
+  persona: string;
+  critical_points: string[];
+  key_arguments: string[];
+  tools_used: string[];
+  stance: string;
+}
+
+export interface ComprehensiveReport {
+  session_id: string;
+  topic: string;
+  status: string;
+  start_time: string;
+  end_time: string;
+  total_turns: number;
+  problem_statement: string;
+  final_answer: string;
+  justification: string;
+  final_recommendation: string;
+  solution_options: SolutionOption[];
+  selected_solution?: string;
+  selection_reasoning: string;
+  implementation_steps: string[];
+  risks_and_mitigations: string[];
+  action_items: string[];
+  consensus_reached: boolean;
+  key_points: string[];
+  disagreements: string[];
+  segment_reports: SegmentReport[];
+  agent_analyses: AgentAnalysis[];
+  turns: DiscussionTurn[];
+  segments: DiscussionSegment[];
 }
 
 export interface Session {
@@ -96,6 +160,7 @@ export interface OrchestratorState {
   max_turns: number;
   current_segment: number;
   total_segments: number;
+  segment_tokens: number;
   total_tokens: number;
   is_running: boolean;
   status: 'idle' | 'thinking' | 'speaking' | 'orchestrating' | 'completed' | 'error';
@@ -125,7 +190,7 @@ export interface ProgressUpdate {
   state: OrchestratorState;
 }
 
-export type ViewMode = 'config' | 'discussion' | 'archives' | 'sessions';
+export type ViewMode = 'config' | 'discussion' | 'archives' | 'sessions' | 'report';
 
 export interface InsightsUpdate {
   type: 'insights';

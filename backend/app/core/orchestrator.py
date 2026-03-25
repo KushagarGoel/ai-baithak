@@ -812,32 +812,109 @@ Requirements:
             traceback.print_exc()
 
     async def _generate_summary(self, start_datetime: datetime) -> DiscussionSummary:
-        """Generate a summary of the discussion."""
-        discussion_text = "\n".join([f"{t.agent_name}: {t.content}" for t in self.turns])
+        """Generate a comprehensive solutioning document for the discussion."""
+        # Build discussion text with segment markers
+        discussion_text = ""
+        current_segment = 0
+        for t in self.turns:
+            if t.segment != current_segment:
+                current_segment = t.segment
+                discussion_text += f"\n\n=== SEGMENT {current_segment} ===\n\n"
+            discussion_text += f"{t.agent_name} ({t.persona}): {t.content}\n\n"
 
-        prompt = f"""Analyze this council discussion and provide a structured summary:
+        # Build segment summaries
+        segment_reports = []
+        for seg in self.segments:
+            segment_turns = [t for t in self.turns if t.segment == seg.segment_number]
+            seg_text = "\n".join([f"{t.agent_name}: {t.content}" for t in segment_turns])
 
-Topic: {self.config.topic}
+            agent_contributions = {}
+            for agent in self.agents:
+                agent_turns = [t for t in segment_turns if t.agent_name == agent.config.name]
+                if agent_turns:
+                    contributions = "; ".join([t.content[:100] + "..." if len(t.content) > 100 else t.content for t in agent_turns[:3]])
+                    agent_contributions[agent.config.name] = contributions
 
-Discussion:
+            segment_reports.append({
+                "segment_number": seg.segment_number,
+                "summary": seg.summary or f"Segment {seg.segment_number} discussion",
+                "key_developments": [],
+                "agent_contributions": agent_contributions,
+                "decisions_made": [],
+                "open_questions": [],
+            })
+
+        prompt = f"""You are creating a comprehensive SOLUTIONING DOCUMENT based on a multi-agent council discussion.
+
+TOPIC: {self.config.topic}
+
+FULL DISCUSSION TRANSCRIPT:
 {discussion_text}
 
-Provide a JSON response with:
+Your task is to analyze this discussion and create a detailed solutioning document. Return ONLY a JSON response in this exact format:
+
 {{
-    "key_points": ["point 1", ...],
+    "problem_statement": "Clear, concise statement of the problem/question being addressed",
+    "key_points": ["Key insight 1", "Key insight 2", ...],
     "consensus_reached": true/false,
-    "disagreements": ["disagreement 1", ...],
-    "action_items": ["action 1", ...],
-    "final_recommendation": "Overall recommendation"
-}}"""
+    "disagreements": ["Description of disagreement 1", ...],
+
+    "solution_options": [
+        {{
+            "option_name": "Name of option/solution",
+            "description": "Detailed description of this solution approach",
+            "pros": ["Advantage 1", "Advantage 2", ...],
+            "cons": ["Disadvantage 1", "Disadvantage 2", ...],
+            "supporters": ["AgentName1", "AgentName2"],
+            "opposers": ["AgentName3"]
+        }}
+    ],
+
+    "selected_solution": "Name of the selected/best solution option (or null if none selected)",
+    "selection_reasoning": "Detailed explanation of why this solution was chosen, including trade-offs considered",
+
+    "agent_analyses": [
+        {{
+            "agent_name": "Agent Name",
+            "persona": "Persona type",
+            "critical_points": ["Critical point they raised", ...],
+            "key_arguments": ["Their main argument", ...],
+            "tools_used": ["tool_name1", ...],
+            "stance": "supportive|opposed|neutral|skeptical"
+        }}
+    ],
+
+    "segment_analyses": [
+        {{
+            "segment_number": 1,
+            "key_developments": ["What happened in this segment"],
+            "decisions_made": ["Decisions made"],
+            "open_questions": ["Questions raised"]
+        }}
+    ],
+
+    "final_answer": "Direct, actionable answer to the original question (2-3 paragraphs)",
+    "justification": "Comprehensive reasoning for the final answer, addressing key concerns",
+    "implementation_steps": ["Step 1: ...", "Step 2: ...", ...],
+    "risks_and_mitigations": ["Risk: ... | Mitigation: ...", ...],
+    "action_items": ["Specific action item 1", "Action item 2", ...],
+    "final_recommendation": "Executive summary recommendation (1 paragraph)"
+}}
+
+Important:
+- Be thorough and specific. Reference agent names and their actual contributions.
+- For solution options, identify what alternatives were discussed and their pros/cons.
+- For agent analyses, capture their unique perspective based on their persona.
+- The final_answer should directly address the original topic/question.
+- Include practical implementation steps and real risks with mitigations."""
 
         try:
             model = self._get_orchestrator_model()
             completion_kwargs = {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "temperature": 0.3,
-                "max_tokens": 1000,
+                "temperature": 0.4,
+                "max_tokens": 4000,
             }
             if self.config.litellm_proxy:
                 completion_kwargs["api_base"] = self.config.litellm_proxy.api_base
@@ -857,6 +934,14 @@ Provide a JSON response with:
             except json.JSONDecodeError:
                 parsed = {}
 
+            # Merge segment analyses with existing segment reports
+            for seg_analysis in parsed.get("segment_analyses", []):
+                for seg_report in segment_reports:
+                    if seg_report["segment_number"] == seg_analysis.get("segment_number"):
+                        seg_report["key_developments"] = seg_analysis.get("key_developments", [])
+                        seg_report["decisions_made"] = seg_analysis.get("decisions_made", [])
+                        seg_report["open_questions"] = seg_analysis.get("open_questions", [])
+
             return DiscussionSummary(
                 topic=self.config.topic,
                 start_time=start_datetime.isoformat(),
@@ -866,20 +951,32 @@ Provide a JSON response with:
                 consensus_reached=parsed.get("consensus_reached", False),
                 disagreements=parsed.get("disagreements", []),
                 action_items=parsed.get("action_items", []),
+                problem_statement=parsed.get("problem_statement", ""),
+                solution_options=parsed.get("solution_options", []),
+                selected_solution=parsed.get("selected_solution"),
+                selection_reasoning=parsed.get("selection_reasoning", ""),
+                segment_reports=segment_reports,
+                agent_analyses=parsed.get("agent_analyses", []),
                 final_recommendation=parsed.get("final_recommendation"),
+                final_answer=parsed.get("final_answer", ""),
+                justification=parsed.get("justification", ""),
+                implementation_steps=parsed.get("implementation_steps", []),
+                risks_and_mitigations=parsed.get("risks_and_mitigations", []),
             )
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             return DiscussionSummary(
                 topic=self.config.topic,
                 start_time=start_datetime.isoformat(),
                 end_time=datetime.now().isoformat(),
                 total_turns=self.current_turn,
-                key_points=["Error generating summary"],
+                key_points=[f"Error generating comprehensive summary: {str(e)}"],
                 consensus_reached=False,
                 disagreements=[],
                 action_items=[],
-                final_recommendation=f"Summary generation failed: {e}",
+                final_recommendation="Summary generation encountered an error. Please review the discussion transcript directly.",
             )
 
     def _get_orchestrator_model(self) -> str:
