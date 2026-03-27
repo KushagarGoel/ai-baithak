@@ -9,6 +9,67 @@ from contextlib import contextmanager
 
 from app.models.schemas import CouncilConfig, DiscussionTurn, DiscussionSegment
 
+# MCP Framework: New database tables for agents and MCP servers
+AGENTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    system_prompt TEXT NOT NULL,
+    model TEXT DEFAULT 'openai/gpt-4o-mini',
+    temperature REAL DEFAULT 0.7,
+    max_tokens INTEGER DEFAULT 2000,
+    speak_probability REAL DEFAULT 1.0,
+    avatar_url TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    is_active BOOLEAN DEFAULT 1
+)
+"""
+
+MCP_SERVERS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS mcp_servers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    transport TEXT NOT NULL,
+    config JSON NOT NULL,
+    is_active BOOLEAN DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+AGENT_MCP_PERMISSIONS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS agent_mcp_permissions (
+    agent_id TEXT NOT NULL,
+    mcp_id TEXT NOT NULL,
+    allowed_tools JSON,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (agent_id, mcp_id),
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+    FOREIGN KEY (mcp_id) REFERENCES mcp_servers(id) ON DELETE CASCADE
+)
+"""
+
+AGENT_GROUPS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS agent_groups (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    description TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+AGENT_GROUP_MEMBERS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS agent_group_members (
+    group_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    PRIMARY KEY (group_id, agent_id),
+    FOREIGN KEY (group_id) REFERENCES agent_groups(id) ON DELETE CASCADE,
+    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+)
+"""
+
 
 class SessionDatabase:
     """SQLite database for storing discussion sessions."""
@@ -118,6 +179,35 @@ class SessionDatabase:
             """)
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)
+            """)
+
+            # MCP Framework: Create new tables for agent configuration
+            conn.execute(AGENTS_TABLE_SQL)
+            conn.execute(MCP_SERVERS_TABLE_SQL)
+            conn.execute(AGENT_MCP_PERMISSIONS_TABLE_SQL)
+            conn.execute(AGENT_GROUPS_TABLE_SQL)
+            conn.execute(AGENT_GROUP_MEMBERS_TABLE_SQL)
+
+            # Cleanup: Remove any MCP servers with invalid transport types
+            # (handles migration from earlier versions that had 'builtin' transport)
+            conn.execute("""
+                DELETE FROM mcp_servers WHERE transport NOT IN ('stdio', 'sse', 'websocket')
+            """)
+            if conn.total_changes > 0:
+                print(f"[DB MIGRATION] Removed {conn.total_changes} MCP servers with invalid transport types")
+
+            # MCP Framework: Create indexes for new tables
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agents_active ON agents(is_active)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_mcp_servers_active ON mcp_servers(is_active)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agent_mcp_agent ON agent_mcp_permissions(agent_id)
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_agent_mcp_mcp ON agent_mcp_permissions(mcp_id)
             """)
 
     @contextmanager
@@ -408,6 +498,305 @@ class SessionDatabase:
                 (session_id,)
             ).fetchone()
             return row[0] if row else 0
+
+    # MCP Framework: Agent CRUD methods
+    def create_agent(self, agent_id: str, name: str, system_prompt: str,
+                     description: str = None, model: str = 'openai/gpt-4o-mini',
+                     temperature: float = 0.7, max_tokens: int = 2000,
+                     speak_probability: float = 1.0, avatar_url: str = None) -> dict:
+        """Create a new agent."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO agents (id, name, description, system_prompt, model,
+                                   temperature, max_tokens, speak_probability, avatar_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (agent_id, name, description, system_prompt, model,
+                  temperature, max_tokens, speak_probability, avatar_url))
+            return self.get_agent(agent_id)
+
+    def get_agent(self, agent_id: str) -> Optional[dict]:
+        """Get an agent by ID."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM agents WHERE id = ?",
+                (agent_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def update_agent(self, agent_id: str, **fields) -> Optional[dict]:
+        """Update an agent's fields."""
+        allowed_fields = {'name', 'description', 'system_prompt', 'model',
+                         'temperature', 'max_tokens', 'speak_probability',
+                         'avatar_url', 'is_active'}
+        updates = {k: v for k, v in fields.items() if k in allowed_fields}
+
+        if not updates:
+            return self.get_agent(agent_id)
+
+        # Add updated_at timestamp
+        updates['updated_at'] = datetime.now().isoformat()
+
+        set_clause = ', '.join(f"{k} = ?" for k in updates.keys())
+        values = list(updates.values()) + [agent_id]
+
+        with self._get_conn() as conn:
+            conn.execute(f"""
+                UPDATE agents SET {set_clause} WHERE id = ?
+            """, values)
+            return self.get_agent(agent_id)
+
+    def delete_agent(self, agent_id: str) -> bool:
+        """Delete an agent."""
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM agents WHERE id = ?", (agent_id,))
+            return conn.total_changes > 0
+
+    def list_agents(self, active_only: bool = True) -> list[dict]:
+        """List all agents."""
+        with self._get_conn() as conn:
+            if active_only:
+                rows = conn.execute(
+                    "SELECT * FROM agents WHERE is_active = 1 ORDER BY created_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM agents ORDER BY created_at DESC"
+                ).fetchall()
+            return [dict(r) for r in rows]
+
+    # MCP Framework: MCP Server CRUD methods
+    def create_mcp_server(self, mcp_id: str, name: str, transport: str,
+                         config: dict, description: str = None) -> dict:
+        """Create a new MCP server."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO mcp_servers (id, name, description, transport, config)
+                VALUES (?, ?, ?, ?, ?)
+            """, (mcp_id, name, description, transport, json.dumps(config)))
+            return self.get_mcp_server(mcp_id)
+
+    def get_mcp_server(self, mcp_id: str) -> Optional[dict]:
+        """Get an MCP server by ID."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM mcp_servers WHERE id = ?",
+                (mcp_id,)
+            ).fetchone()
+            if row:
+                result = dict(row)
+                result['config'] = json.loads(result['config'])
+                return result
+            return None
+
+    def get_mcp_server_by_name(self, name: str) -> Optional[dict]:
+        """Get an MCP server by name."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM mcp_servers WHERE name = ?",
+                (name,)
+            ).fetchone()
+            if row:
+                result = dict(row)
+                result['config'] = json.loads(result['config'])
+                return result
+            return None
+
+    def update_mcp_server(self, mcp_id: str, **fields) -> Optional[dict]:
+        """Update an MCP server's fields."""
+        allowed_fields = {'name', 'description', 'transport', 'config', 'is_active'}
+        updates = {k: v for k, v in fields.items() if k in allowed_fields}
+
+        if 'config' in updates:
+            updates['config'] = json.dumps(updates['config'])
+
+        if not updates:
+            return self.get_mcp_server(mcp_id)
+
+        set_clause = ', '.join(f"{k} = ?" for k in updates.keys())
+        values = list(updates.values()) + [mcp_id]
+
+        with self._get_conn() as conn:
+            conn.execute(f"""
+                UPDATE mcp_servers SET {set_clause} WHERE id = ?
+            """, values)
+            return self.get_mcp_server(mcp_id)
+
+    def delete_mcp_server(self, mcp_id: str) -> bool:
+        """Delete an MCP server."""
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM mcp_servers WHERE id = ?", (mcp_id,))
+            return conn.total_changes > 0
+
+    def list_mcp_servers(self, active_only: bool = True) -> list[dict]:
+        """List all MCP servers."""
+        with self._get_conn() as conn:
+            if active_only:
+                rows = conn.execute(
+                    "SELECT * FROM mcp_servers WHERE is_active = 1 ORDER BY created_at DESC"
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT * FROM mcp_servers ORDER BY created_at DESC"
+                ).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item['config'] = json.loads(item['config'])
+                result.append(item)
+            return result
+
+    # MCP Framework: Agent-MCP Permission methods
+    def grant_mcp_access(self, agent_id: str, mcp_id: str,
+                        allowed_tools: list[str] = None) -> dict:
+        """Grant an agent access to an MCP server."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO agent_mcp_permissions
+                (agent_id, mcp_id, allowed_tools)
+                VALUES (?, ?, ?)
+            """, (agent_id, mcp_id, json.dumps(allowed_tools) if allowed_tools else None))
+            return self.get_agent_mcp_permission(agent_id, mcp_id)
+
+    def revoke_mcp_access(self, agent_id: str, mcp_id: str) -> bool:
+        """Revoke an agent's access to an MCP server."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                DELETE FROM agent_mcp_permissions WHERE agent_id = ? AND mcp_id = ?
+            """, (agent_id, mcp_id))
+            return conn.total_changes > 0
+
+    def get_agent_mcp_permission(self, agent_id: str, mcp_id: str) -> Optional[dict]:
+        """Get permission details for an agent-MCP pair."""
+        with self._get_conn() as conn:
+            row = conn.execute("""
+                SELECT * FROM agent_mcp_permissions WHERE agent_id = ? AND mcp_id = ?
+            """, (agent_id, mcp_id)).fetchone()
+            if row:
+                result = dict(row)
+                result['allowed_tools'] = json.loads(result['allowed_tools']) if result['allowed_tools'] else None
+                return result
+            return None
+
+    def get_agent_mcps(self, agent_id: str) -> list[dict]:
+        """Get all MCP servers an agent has access to."""
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT m.*, p.allowed_tools
+                FROM mcp_servers m
+                JOIN agent_mcp_permissions p ON m.id = p.mcp_id
+                WHERE p.agent_id = ? AND m.is_active = 1
+                ORDER BY m.name
+            """, (agent_id,)).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item['config'] = json.loads(item['config'])
+                item['allowed_tools'] = json.loads(item['allowed_tools']) if item['allowed_tools'] else None
+                result.append(item)
+            return result
+
+    def get_mcp_agents(self, mcp_id: str) -> list[dict]:
+        """Get all agents that have access to an MCP server."""
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT a.*, p.allowed_tools
+                FROM agents a
+                JOIN agent_mcp_permissions p ON a.id = p.agent_id
+                WHERE p.mcp_id = ? AND a.is_active = 1
+                ORDER BY a.name
+            """, (mcp_id,)).fetchall()
+            result = []
+            for row in rows:
+                item = dict(row)
+                item['allowed_tools'] = json.loads(item['allowed_tools']) if item['allowed_tools'] else None
+                result.append(item)
+            return result
+
+    def update_mcp_permissions(self, agent_id: str, mcp_id: str,
+                               allowed_tools: list[str] = None) -> Optional[dict]:
+        """Update the allowed tools for an agent-MCP pair."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                UPDATE agent_mcp_permissions
+                SET allowed_tools = ?
+                WHERE agent_id = ? AND mcp_id = ?
+            """, (json.dumps(allowed_tools) if allowed_tools else None, agent_id, mcp_id))
+            return self.get_agent_mcp_permission(agent_id, mcp_id)
+
+    # MCP Framework: Agent Group methods
+    def create_agent_group(self, group_id: str, name: str, description: str = None) -> dict:
+        """Create a new agent group."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO agent_groups (id, name, description)
+                VALUES (?, ?, ?)
+            """, (group_id, name, description))
+            return self.get_agent_group(group_id)
+
+    def get_agent_group(self, group_id: str) -> Optional[dict]:
+        """Get an agent group by ID."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_groups WHERE id = ?",
+                (group_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def delete_agent_group(self, group_id: str) -> bool:
+        """Delete an agent group."""
+        with self._get_conn() as conn:
+            conn.execute("DELETE FROM agent_groups WHERE id = ?", (group_id,))
+            return conn.total_changes > 0
+
+    def list_agent_groups(self) -> list[dict]:
+        """List all agent groups."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM agent_groups ORDER BY created_at DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def add_agent_to_group(self, group_id: str, agent_id: str) -> bool:
+        """Add an agent to a group."""
+        with self._get_conn() as conn:
+            try:
+                conn.execute("""
+                    INSERT INTO agent_group_members (group_id, agent_id)
+                    VALUES (?, ?)
+                """, (group_id, agent_id))
+                return True
+            except sqlite3.IntegrityError:
+                return False
+
+    def remove_agent_from_group(self, group_id: str, agent_id: str) -> bool:
+        """Remove an agent from a group."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                DELETE FROM agent_group_members WHERE group_id = ? AND agent_id = ?
+            """, (group_id, agent_id))
+            return conn.total_changes > 0
+
+    def get_group_agents(self, group_id: str) -> list[dict]:
+        """Get all agents in a group."""
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT a.* FROM agents a
+                JOIN agent_group_members m ON a.id = m.agent_id
+                WHERE m.group_id = ? AND a.is_active = 1
+                ORDER BY a.name
+            """, (group_id,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_agent_groups(self, agent_id: str) -> list[dict]:
+        """Get all groups an agent belongs to."""
+        with self._get_conn() as conn:
+            rows = conn.execute("""
+                SELECT g.* FROM agent_groups g
+                JOIN agent_group_members m ON g.id = m.group_id
+                WHERE m.agent_id = ?
+                ORDER BY g.name
+            """, (agent_id,)).fetchall()
+            return [dict(r) for r in rows]
 
 
 # Global database instance

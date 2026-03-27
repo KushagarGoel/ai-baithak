@@ -46,7 +46,12 @@ class CouncilAgent:
         self.litellm_proxy = litellm_proxy
         self.messages: list[AgentMessage] = []
         self.tokens_used = 0
+        self._stop_requested = False
         self._setup_system_message()
+
+    def stop(self):
+        """Request the agent to stop processing."""
+        self._stop_requested = True
 
     def _setup_system_message(self):
         """Initialize with system message."""
@@ -96,6 +101,18 @@ Discussion rules:
 
         while iteration < max_tool_iterations:
             iteration += 1
+
+            # Check if stop was requested
+            if self._stop_requested:
+                print(f"[AGENT] {self.config.name} stopping due to request")
+                return {
+                    "agent_name": self.config.name,
+                    "persona": self.persona.name,
+                    "content": "[Discussion stopped by user]",
+                    "tool_calls": all_tool_calls,
+                    "tool_results": all_tool_results,
+                    "tokens_used": self.tokens_used,
+                }
 
             try:
                 # Notify LLM call starting

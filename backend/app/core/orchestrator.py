@@ -229,6 +229,10 @@ class CouncilOrchestrator:
         print(f"[ORCHESTRATOR] Stop requested for session {self.config.session_id}")
         self._stop_requested = True
 
+        # Signal all agents to stop
+        for agent in self.agents:
+            agent.stop()
+
     async def run_discussion(self, progress_callback=None):
         """Run the full council discussion."""
         self.start_time = time.time()
@@ -686,8 +690,41 @@ Be concise but helpful."""
             print(f"[KEY INSIGHTS DEBUG] Not enough turns (< 3), skipping")
             return
 
+        # Filter out error messages, tool debug info, and non-substantive content
+        def is_substantive_content(content: str) -> bool:
+            """Check if content contains actual discussion insights, not errors/debug."""
+            content_lower = content.lower().strip()
+
+            # Skip error messages about tools
+            if content_lower.startswith("[error:") or "tool rejected" in content_lower:
+                return False
+            if "invoking" in content_lower and "incorrect parameter" in content_lower:
+                return False
+            if content_lower.startswith("the tool rejects"):
+                return False
+            if "suggesting the actual parameter" in content_lower:
+                return False
+
+            # Skip very short messages
+            if len(content) < 30:
+                return False
+
+            # Skip messages that are just about tool execution
+            if content_lower.startswith("["):
+                return False
+
+            return True
+
+        # Filter turns to only include substantive discussion
+        substantive_turns = [t for t in segment_turns if is_substantive_content(t.content)]
+        print(f"[KEY INSIGHTS DEBUG] Found {len(substantive_turns)} substantive turns after filtering")
+
+        if len(substantive_turns) < 2:
+            print(f"[KEY INSIGHTS DEBUG] Not enough substantive turns after filtering, skipping")
+            return
+
         # Get recent discussion
-        recent_turns = segment_turns[-10:]
+        recent_turns = substantive_turns[-10:]
         discussion_text = "\n".join([f"{t.agent_name}: {t.content[:500]}" for t in recent_turns])
 
         prompt = f"""You are an expert at extracting key insights from discussions.

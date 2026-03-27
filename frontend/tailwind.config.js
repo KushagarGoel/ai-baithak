@@ -11,7 +11,7 @@ module.exports = {
       colors: {
         background: '#0b0e14',
         surface: {
-          DEFAULT: '#0b0e14',
+          DEFAULT: '#111520',
           dim: '#0b0e14',
           bright: '#282c36',
           tint: 'rgba(129, 233, 255, 0.05)',
@@ -24,8 +24,8 @@ module.exports = {
           highest: '#22262f',
         },
         primary: {
-          DEFAULT: '#81e9ff',
-          dim: '#00d1ee',
+          DEFAULT: '#4dc9f0',
+          dim: '#2ab8e0',
           container: '#00e0ff',
           fixed: '#00e0ff',
           'fixed-dim': '#00d1ee',
@@ -56,9 +56,21 @@ module.exports = {
         'on-background': '#ecedf6',
         'on-surface': '#ecedf6',
         'on-surface-variant': '#a9abb3',
-        'on-primary': '#005561',
+        'on-primary': '#0a2a33',
         'on-secondary': '#005d2c',
         'on-error': '#490006',
+        success: {
+          DEFAULT: '#3fff8b',
+          container: '#006d35',
+        },
+        warning: {
+          DEFAULT: '#ffc107',
+          container: '#7d5a00',
+        },
+        info: {
+          DEFAULT: '#4dc9f0',
+          container: '#005561',
+        },
       },
       fontFamily: {
         sans: ['Space Grotesk', 'system-ui', 'sans-serif'],

@@ -190,7 +190,10 @@ export interface ProgressUpdate {
   state: OrchestratorState;
 }
 
-export type ViewMode = 'config' | 'discussion' | 'archives' | 'sessions' | 'report';
+export type ViewMode = 'config' | 'discussion' | 'archives' | 'sessions' | 'report' | 'admin';
+
+// Re-export admin types
+export * from './admin';
 
 export interface InsightsUpdate {
   type: 'insights';

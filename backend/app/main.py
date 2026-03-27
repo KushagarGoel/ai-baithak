@@ -1,12 +1,17 @@
 """FastAPI application for Agent Council backend."""
 
 import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.api.routes import router as api_router
+from app.api.admin import router as admin_router
 from app.api.websocket import handle_websocket
+from app.mcp.registry import mcp_registry
+from app.core.personas_seed import seed_if_needed
 
 # Configure logging
 logging.basicConfig(
@@ -15,11 +20,33 @@ logging.basicConfig(
 )
 
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler."""
+    # Startup
+    logger = logging.getLogger(__name__)
+    logger.info("[STARTUP] Initializing Agent Council...")
+
+    # Seed default personas if needed
+    seed_if_needed()
+
+    # Load MCP servers from database
+    await mcp_registry.load_from_database()
+    logger.info(f"[STARTUP] Loaded {len(mcp_registry.list_mcps())} MCP servers")
+
+    yield
+
+    # Shutdown
+    logger.info("[SHUTDOWN] Cleaning up...")
+    await mcp_registry.close_all()
+
+
 app = FastAPI(
     title=settings.APP_NAME,
     description="MCP-powered Agent Council API",
     version="0.1.0",
     debug=settings.DEBUG,
+    lifespan=lifespan,
 )
 
 # CORS middleware - expanded for WebSocket support
@@ -34,6 +61,7 @@ app.add_middleware(
 
 # Include API routes
 app.include_router(api_router, prefix="/api")
+app.include_router(admin_router, prefix="/api")
 
 
 @app.websocket("/ws/discussion/{session_id}")

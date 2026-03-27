@@ -1,8 +1,160 @@
 """Pydantic models for the Agent Council API."""
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Optional, Literal
 from pydantic import BaseModel, Field
+
+
+# MCP Framework: Agent Configuration Models
+class Agent(BaseModel):
+    """An agent stored in the database."""
+    id: str
+    name: str
+    description: Optional[str] = None
+    system_prompt: str
+    model: str = "openai/gpt-4o-mini"
+    temperature: float = 0.7
+    max_tokens: int = 2000
+    speak_probability: float = 1.0
+    avatar_url: Optional[str] = None
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    is_active: bool = True
+
+
+class AgentCreate(BaseModel):
+    """Request to create an agent."""
+    name: str
+    description: Optional[str] = None
+    system_prompt: str
+    model: str = "openai/gpt-4o-mini"
+    temperature: float = 0.7
+    max_tokens: int = 2000
+    speak_probability: float = 1.0
+    avatar_url: Optional[str] = None
+
+
+class AgentUpdate(BaseModel):
+    """Request to update an agent."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    system_prompt: Optional[str] = None
+    model: Optional[str] = None
+    temperature: Optional[float] = None
+    max_tokens: Optional[int] = None
+    speak_probability: Optional[float] = None
+    avatar_url: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+# MCP Framework: MCP Server Models
+class MCPServerBase(BaseModel):
+    """Base MCP server configuration."""
+    name: str
+    description: Optional[str] = None
+
+
+class MCPServerCreate(MCPServerBase):
+    """Request to create an MCP server."""
+    transport: Literal["stdio", "sse", "websocket"]
+    config: dict[str, Any]
+
+
+class MCPServerUpdate(BaseModel):
+    """Request to update an MCP server."""
+    name: Optional[str] = None
+    description: Optional[str] = None
+    transport: Optional[Literal["stdio", "sse", "websocket"]] = None
+    config: Optional[dict[str, Any]] = None
+    is_active: Optional[bool] = None
+
+
+class MCPServer(MCPServerBase):
+    """An MCP server stored in the database."""
+    id: str
+    transport: Literal["stdio", "sse", "websocket"]
+    config: dict[str, Any]
+    is_active: bool = True
+    created_at: Optional[str] = None
+
+
+class MCPServerWithStatus(MCPServer):
+    """MCP server with connection status."""
+    status: str = "unknown"  # active, offline, error
+    tool_count: int = 0
+    last_error: Optional[str] = None
+
+
+# MCP Framework: Permission Models
+class AgentMCPPermission(BaseModel):
+    """Permission grant for agent to access MCP."""
+    agent_id: str
+    mcp_id: str
+    allowed_tools: Optional[list[str]] = None  # None = all tools allowed
+    created_at: Optional[str] = None
+
+
+class MCPAccessGrant(BaseModel):
+    """Request to grant MCP access to an agent."""
+    mcp_id: str
+    allowed_tools: Optional[list[str]] = None
+
+
+class MCPAccessUpdate(BaseModel):
+    """Request to update MCP access permissions."""
+    allowed_tools: Optional[list[str]] = None
+
+
+class AgentWithMCPS(Agent):
+    """Agent with its MCP permissions."""
+    mcps: list[MCPServer] = Field(default_factory=list)
+
+
+# MCP Framework: Agent Group Models
+class AgentGroup(BaseModel):
+    """A group of agents."""
+    id: str
+    name: str
+    description: Optional[str] = None
+    created_at: Optional[str] = None
+
+
+class AgentGroupCreate(BaseModel):
+    """Request to create an agent group."""
+    name: str
+    description: Optional[str] = None
+
+
+class AgentGroupWithMembers(AgentGroup):
+    """Agent group with its member agents."""
+    agents: list[Agent] = Field(default_factory=list)
+
+
+# MCP Framework: Permission Matrix
+class PermissionMatrixCell(BaseModel):
+    """A cell in the permission matrix."""
+    agent_id: str
+    mcp_id: str
+    has_access: bool
+    allowed_tools: Optional[list[str]] = None
+    all_tools: list[str] = Field(default_factory=list)
+
+
+class PermissionMatrix(BaseModel):
+    """The full permission matrix."""
+    agents: list[Agent]
+    mcps: list[MCPServer]
+    permissions: list[PermissionMatrixCell]
+
+
+# MCP Framework: Tool Models
+class MCPTool(BaseModel):
+    """A tool provided by an MCP server."""
+    name: str
+    description: str
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    mcp_server_id: str
+    mcp_server_name: str
 
 
 class LiteLLMProxyConfig(BaseModel):

@@ -131,19 +131,26 @@ class WriteFileTool(BaseTool):
         return {
             "type": "object",
             "properties": {
-                "file_path": {"type": "string", "description": "Path to the file to write"},
+                "file_path": {"type": "string", "description": "Path to the file to write (use this or 'path')"},
+                "path": {"type": "string", "description": "Alternative to file_path"},
                 "content": {"type": "string", "description": "Content to write"},
                 "append": {"type": "boolean", "description": "Append instead of overwrite"},
             },
-            "required": ["file_path", "content"],
+            "required": ["content"],
         }
 
-    async def execute(self, file_path: str, content: str, append: bool = False) -> ToolResult:
+    async def execute(self, file_path: Optional[str] = None, content: Optional[str] = None, append: bool = False, path: Optional[str] = None) -> ToolResult:
         try:
-            if not os.path.isabs(file_path):
-                full_path = os.path.join(self.base_path, file_path)
+            target_path = file_path or path
+            if not target_path:
+                return ToolResult(success=False, data=None, error="Missing required parameter: file_path or path")
+            if not content:
+                return ToolResult(success=False, data=None, error="Missing required parameter: content")
+
+            if not os.path.isabs(target_path):
+                full_path = os.path.join(self.base_path, target_path)
             else:
-                full_path = file_path
+                full_path = target_path
 
             full_path = os.path.abspath(full_path)
 
@@ -182,12 +189,13 @@ class ListDirectoryTool(BaseTool):
             },
         }
 
-    async def execute(self, directory_path: str = ".") -> ToolResult:
+    async def execute(self, directory_path: Optional[str] = None, directory: Optional[str] = None) -> ToolResult:
         try:
-            if not os.path.isabs(directory_path):
-                full_path = os.path.join(self.base_path, directory_path)
+            target_path = directory_path or directory or "."
+            if not os.path.isabs(target_path):
+                full_path = os.path.join(self.base_path, target_path)
             else:
-                full_path = directory_path
+                full_path = target_path
 
             full_path = os.path.abspath(full_path)
 
@@ -372,10 +380,11 @@ class MCPToolServer:
         self._register_default_tools()
 
     def _register_default_tools(self):
-        """Register default tools."""
-        self.register(ReadFileTool(self.base_path))
-        self.register(WriteFileTool(self.base_path))
-        self.register(ListDirectoryTool(self.base_path))
+        """Register default tools.
+
+        Note: Filesystem operations (read_file, write_file, list_directory)
+        are provided by the filesystem MCP server, not built-in tools.
+        """
         self.register(WebSearchTool())
         self.register(WebFetchTool())
         self.register(ExecutePythonTool())

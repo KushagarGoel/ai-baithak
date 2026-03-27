@@ -6,15 +6,15 @@
 
 :root {
   --background: #0b0e14;
-  --surface: #0b0e14;
+  --surface: #111520;
   --surface-container-lowest: #000000;
   --surface-container-low: #10131a;
   --surface-container: #161a21;
   --surface-container-high: #1c2028;
   --surface-container-highest: #22262f;
   --surface-bright: #282c36;
-  --primary: #81e9ff;
-  --primary-dim: #00d1ee;
+  --primary: #4dc9f0;
+  --primary-dim: #2ab8e0;
   --primary-container: #00e0ff;
   --secondary: #3fff8b;
   --secondary-dim: #24f07e;
@@ -30,9 +30,15 @@
   --on-background: #ecedf6;
   --on-surface: #ecedf6;
   --on-surface-variant: #a9abb3;
-  --on-primary: #005561;
+  --on-primary: #0a2a33;
   --on-secondary: #005d2c;
   --on-error: #490006;
+  --success: #3fff8b;
+  --success-container: #006d35;
+  --warning: #ffc107;
+  --warning-container: #7d5a00;
+  --info: #4dc9f0;
+  --info-container: #005561;
 }
 
 * {
