@@ -1064,6 +1064,18 @@ Requirements:
                 "open_questions": [],
             })
 
+        # Build fallback content from discussion
+        fallback_problem = f"Discussion on: {self.config.topic}"
+        fallback_answer = f"The council discussed '{self.config.topic}' across {len(self.segments)} segment(s) with {len(self.turns)} turns. "
+        if len(self.turns) > 0:
+            key_contributors = list(set([t.agent_name for t in self.turns]))[:5]
+            fallback_answer += f"Key contributors: {', '.join(key_contributors)}. "
+            # Extract first meaningful contribution as context
+            for t in self.turns[:3]:
+                if len(t.content) > 50:
+                    fallback_answer += f"{t.agent_name} noted: {t.content[:200]}... "
+                    break
+
         prompt = f"""You are creating a comprehensive SOLUTIONING DOCUMENT based on a multi-agent council discussion.
 
 TOPIC: {self.config.topic}
@@ -1074,7 +1086,7 @@ FULL DISCUSSION TRANSCRIPT:
 Your task is to analyze this discussion and create a detailed solutioning document. Return ONLY a JSON response in this exact format:
 
 {{
-    "problem_statement": "Clear, concise statement of the problem/question being addressed",
+    "problem_statement": "Clear, concise statement of the problem/question being addressed - MUST be non-empty, describe what was discussed",
     "key_points": ["Key insight 1", "Key insight 2", ...],
     "consensus_reached": true/false,
     "disagreements": ["Description of disagreement 1", ...],
@@ -1113,20 +1125,26 @@ Your task is to analyze this discussion and create a detailed solutioning docume
         }}
     ],
 
-    "final_answer": "Direct, actionable answer to the original question (2-3 paragraphs)",
-    "justification": "Comprehensive reasoning for the final answer, addressing key concerns",
+    "final_answer": "Direct, actionable answer to the original question (2-3 paragraphs) - MUST be non-empty, summarize the discussion outcomes",
+    "justification": "Comprehensive reasoning for the final answer, addressing key concerns - MUST be non-empty, explain the reasoning process",
     "implementation_steps": ["Step 1: ...", "Step 2: ...", ...],
     "risks_and_mitigations": ["Risk: ... | Mitigation: ...", ...],
     "action_items": ["Specific action item 1", "Action item 2", ...],
-    "final_recommendation": "Executive summary recommendation (1 paragraph)"
+    "final_recommendation": "Executive summary recommendation (1 paragraph) - MUST be non-empty"
 }}
 
-Important:
-- Be thorough and specific. Reference agent names and their actual contributions.
-- For solution options, identify what alternatives were discussed and their pros/cons.
-- For agent analyses, capture their unique perspective based on their persona.
-- The final_answer should directly address the original topic/question.
-- Include practical implementation steps and real risks with mitigations."""
+CRITICAL INSTRUCTIONS:
+1. ALL fields marked "MUST be non-empty" must contain meaningful content. Do not return empty strings.
+2. Even if no consensus was reached, describe what WAS discussed and the current state of thinking.
+3. The problem_statement should describe the topic/question that was addressed.
+4. The final_answer should summarize what the council concluded, even if it's "The council explored multiple perspectives but did not reach consensus. Key considerations include..."
+5. Include practical implementation steps and real risks with mitigations.
+6. Be thorough and specific. Reference agent names and their actual contributions.
+7. For agent analyses, capture their unique perspective based on their persona.
+
+FALLBACK CONTENT (use if discussion seems sparse):
+- Problem: {fallback_problem}
+- Summary: {fallback_answer}"""
 
         try:
             model = self._get_orchestrator_model()
@@ -1162,6 +1180,24 @@ Important:
                         seg_report["decisions_made"] = seg_analysis.get("decisions_made", [])
                         seg_report["open_questions"] = seg_analysis.get("open_questions", [])
 
+            # Ensure critical fields have fallback content
+            problem_statement = parsed.get("problem_statement", "")
+            if not problem_statement:
+                problem_statement = f"The council discussed: {self.config.topic}"
+
+            final_answer = parsed.get("final_answer", "")
+            if not final_answer:
+                final_answer = fallback_answer
+
+            justification = parsed.get("justification", "")
+            if not justification:
+                consensus_status = "reached consensus" if parsed.get("consensus_reached") else "explored multiple perspectives"
+                justification = f"The council {consensus_status} on '{self.config.topic}'. Key points were: " + "; ".join(parsed.get("key_points", ["No specific points recorded"])[:3])
+
+            final_recommendation = parsed.get("final_recommendation")
+            if not final_recommendation:
+                final_recommendation = f"Based on the discussion of '{self.config.topic}', the council {('recommends proceeding with: ' + str(parsed.get('selected_solution'))) if parsed.get('selected_solution') else 'suggests further exploration of the topic.'}"
+
             return DiscussionSummary(
                 topic=self.config.topic,
                 start_time=start_datetime.isoformat(),
@@ -1171,15 +1207,15 @@ Important:
                 consensus_reached=parsed.get("consensus_reached", False),
                 disagreements=parsed.get("disagreements", []),
                 action_items=parsed.get("action_items", []),
-                problem_statement=parsed.get("problem_statement", ""),
+                problem_statement=problem_statement,
                 solution_options=parsed.get("solution_options", []),
                 selected_solution=parsed.get("selected_solution"),
                 selection_reasoning=parsed.get("selection_reasoning", ""),
                 segment_reports=segment_reports,
                 agent_analyses=parsed.get("agent_analyses", []),
-                final_recommendation=parsed.get("final_recommendation"),
-                final_answer=parsed.get("final_answer", ""),
-                justification=parsed.get("justification", ""),
+                final_recommendation=final_recommendation,
+                final_answer=final_answer,
+                justification=justification,
                 implementation_steps=parsed.get("implementation_steps", []),
                 risks_and_mitigations=parsed.get("risks_and_mitigations", []),
             )

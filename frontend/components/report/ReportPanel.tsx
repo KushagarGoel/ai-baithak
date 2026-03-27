@@ -14,6 +14,9 @@ export function ReportPanel() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'overview' | 'solutions' | 'segments' | 'agents' | 'implementation'>('overview');
+  const [showRegenerateModal, setShowRegenerateModal] = useState(false);
+  const [customInstructions, setCustomInstructions] = useState('');
+  const [regenerating, setRegenerating] = useState(false);
 
   useEffect(() => {
     if (currentSessionId && !comprehensiveReport) {
@@ -31,7 +34,9 @@ export function ReportPanel() {
       const response = await fetch(`${API_BASE_URL}/api/sessions/${currentSessionId}/report`);
       if (!response.ok) {
         if (response.status === 404) {
-          throw new Error('Report not yet generated. Wait for the discussion to complete.');
+          // Try to generate a new report
+          await regenerateReport();
+          return;
         }
         throw new Error('Failed to fetch report');
       }
@@ -41,6 +46,59 @@ export function ReportPanel() {
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const regenerateReport = async (instructions?: string) => {
+    if (!currentSessionId) return;
+
+    setRegenerating(true);
+    setError(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${currentSessionId}/generate-report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ custom_instructions: instructions }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to generate report');
+      }
+
+      const data = await response.json();
+      if (data.success && data.report) {
+        setComprehensiveReport(data.report);
+        setShowRegenerateModal(false);
+        setCustomInstructions('');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to regenerate report');
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
+  const downloadReport = async () => {
+    if (!currentSessionId) return;
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${currentSessionId}/report-pdf`);
+      if (!response.ok) {
+        throw new Error('Failed to download report');
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `report-${currentSessionId}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert('Failed to download report');
     }
   };
 
@@ -92,11 +150,54 @@ export function ReportPanel() {
             <Badge variant={report.consensus_reached ? 'success' : 'warning'}>
               {report.consensus_reached ? 'Consensus Reached' : 'No Consensus'}
             </Badge>
-            <Button onClick={() => setViewMode('discussion')} variant="secondary" size="sm">
-              Back to Discussion
+            <Button onClick={() => setShowRegenerateModal(true)} variant="secondary" size="sm">
+              Regenerate
+            </Button>
+            <Button onClick={downloadReport} variant="secondary" size="sm">
+              Download MD
+            </Button>
+            <Button onClick={() => setViewMode('discussion')} variant="ghost" size="sm">
+              Back
             </Button>
           </div>
         </div>
+
+        {/* Regenerate Modal */}
+        {showRegenerateModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-surface rounded-lg p-6 max-w-lg w-full mx-4 shadow-lg">
+              <h3 className="text-headline-sm font-semibold mb-4">Regenerate Report</h3>
+              <p className="text-body-sm text-on-surface-variant mb-4">
+                Optionally provide custom instructions for how the report should be generated.
+                Leave empty for default report generation.
+              </p>
+              <textarea
+                value={customInstructions}
+                onChange={(e) => setCustomInstructions(e.target.value)}
+                placeholder="e.g., Focus on the technical implementation details and security considerations..."
+                className="w-full h-32 p-3 border border-outline-variant rounded-lg resize-none bg-surface text-on-surface"
+              />
+              <div className="flex justify-end gap-2 mt-4">
+                <Button
+                  onClick={() => {
+                    setShowRegenerateModal(false);
+                    setCustomInstructions('');
+                  }}
+                  variant="ghost"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  onClick={() => regenerateReport(customInstructions || undefined)}
+                  variant="primary"
+                  disabled={regenerating}
+                >
+                  {regenerating ? 'Generating...' : 'Generate'}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="flex gap-1 border-b border-outline-variant/10">

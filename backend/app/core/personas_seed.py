@@ -95,6 +95,26 @@ def _ensure_mcp_servers():
             "template": "filesystem",
             "vars": {"WORKSPACE_PATH": "."}
         },
+        "excalidraw": {
+            "template": None,
+            "config": {
+                "command": "npx",
+                "args": ["-y", "@excalidraw/mcp-server"],
+                "env": {}
+            },
+            "transport": "stdio",
+            "description": "Create diagrams and sketches using Excalidraw"
+        },
+        "mermaid": {
+            "template": None,
+            "config": {
+                "command": "npx",
+                "args": ["-y", "@mermaid-js/mcp-server"],
+                "env": {}
+            },
+            "transport": "stdio",
+            "description": "Generate flowcharts and diagrams using Mermaid syntax"
+        },
         # Note: web_search, web_fetch, execute_python are built-in tools
         # handled by MCPToolServer, not registered as MCP servers
     }

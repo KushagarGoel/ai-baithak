@@ -182,7 +182,7 @@ class CouncilConfig(BaseModel):
     min_turns: int = 5
     agents: list[AgentConfig] = Field(default_factory=list)
     litellm_proxy: Optional[LiteLLMProxyConfig] = None
-    orchestrator_model: str = "anthropic/claude-3-haiku-20240307"
+    orchestrator_model: str = "kimi-latest"
     orchestrator_frequency: int = 3
     context_compression_threshold: int = 40
     save_transcript: bool = True

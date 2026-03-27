@@ -75,7 +75,6 @@ asyncio.run(main())
 ```python
 models = [
     "openai/gpt-4o",
-    "anthropic/claude-3-sonnet-20240229",
     "openai/gpt-4o-mini",
     "anthropic/claude-3-haiku-20240307",
     "google/gemini-1.5-flash",
@@ -117,7 +116,7 @@ Agents can use these tools during discussions:
 Any model supported by [LiteLLM](https://docs.litellm.ai/docs/providers) works:
 
 - OpenAI (`openai/gpt-4o`, `openai/gpt-4o-mini`)
-- Anthropic (`anthropic/claude-3-opus-20240229`, `anthropic/claude-3-sonnet-20240229`, `anthropic/claude-3-haiku-20240307`)
+- Anthropic (`anthropic/claude-3-opus-20240229`, `anthropic/claude-3-haiku-20240307`)
 - Google (`google/gemini-1.5-pro`, `google/gemini-1.5-flash`)
 - Azure, AWS Bedrock, Cohere, Mistral, and more
 

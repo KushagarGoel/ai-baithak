@@ -4,8 +4,8 @@ import os
 import json
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi.responses import FileResponse, StreamingResponse
 
 from app.models.schemas import (
     Session,
@@ -18,6 +18,7 @@ from app.models.schemas import (
 )
 from app.core.database import db
 from app.core.config import settings
+from app.core.report_service import ReportService
 
 router = APIRouter()
 
@@ -308,3 +309,269 @@ async def get_session_report(session_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
+
+
+@router.post("/sessions/{session_id}/generate-report")
+async def generate_session_report(
+    session_id: str,
+    request_data: dict = None
+):
+    """Generate a report on-demand for any session (active or completed).
+
+    Args:
+        session_id: The session ID
+        request_data: Optional dict with custom_instructions and model
+
+    Returns:
+        The generated report data
+    """
+    try:
+        # Check if session exists
+        if not db.session_exists(session_id):
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Load session to get config with litellm_proxy
+        session_data = db.load_session_full(session_id)
+        config_data = session_data.get('config', {})
+        if isinstance(config_data, str):
+            config_data = json.loads(config_data)
+
+        # Get custom instructions if provided
+        custom_instructions = None
+        model = None  # Use config's orchestrator_model by default
+        if request_data:
+            custom_instructions = request_data.get("custom_instructions")
+            model = request_data.get("model")
+
+        # Create report service with litellm_proxy from config
+        litellm_proxy = config_data.get('litellm_proxy')
+        report_service = ReportService(litellm_proxy=litellm_proxy)
+
+        # Generate report
+        summary = await report_service.generate_report(
+            session_id=session_id,
+            custom_instructions=custom_instructions,
+            model=model
+        )
+
+        # Convert to dict for response
+        report_data = summary.model_dump()
+        report_data["session_id"] = session_id
+        report_data["status"] = "generated"
+
+        return {
+            "success": True,
+            "message": "Report generated successfully",
+            "report": report_data
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate report: {str(e)}")
+
+
+@router.get("/sessions/{session_id}/report-pdf")
+async def download_report_pdf(session_id: str):
+    """Download the session report as a PDF.
+
+    Args:
+        session_id: The session ID
+
+    Returns:
+        PDF file download
+    """
+    try:
+        # Get existing report or generate one
+        report_service = ReportService()
+        report = report_service.get_existing_report(session_id)
+
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found. Generate a report first.")
+
+        # Generate PDF (placeholder - will implement with proper PDF library)
+        # For now, return markdown as a downloadable file
+        from io import StringIO
+
+        # Build markdown content
+        md_content = f"""# Solutioning Report: {report['topic']}
+
+**Session ID:** {session_id}
+**Status:** {report['status']}
+**Turns:** {report['total_turns']}
+**Date:** {report['start_time'][:10] if report['start_time'] else 'N/A'}
+
+---
+
+## Problem Statement
+
+{report['problem_statement'] or 'No problem statement available.'}
+
+## Final Answer
+
+{report['final_answer'] or 'No final answer available.'}
+
+## Justification
+
+{report['justification'] or 'No justification available.'}
+
+---
+
+## Solution Options
+
+"""
+        for i, option in enumerate(report.get('solution_options', []), 1):
+            md_content += f"""### {i}. {option.get('option_name', 'Unnamed')}
+
+{option.get('description', 'No description.')}
+
+**Pros:**
+"""
+            for pro in option.get('pros', []):
+                md_content += f"- {pro}\n"
+
+            md_content += "\n**Cons:**\n"
+            for con in option.get('cons', []):
+                md_content += f"- {con}\n"
+
+            if option.get('supporters'):
+                md_content += f"\n**Supporters:** {', '.join(option['supporters'])}\n"
+            if option.get('opposers'):
+                md_content += f"**Opposers:** {', '.join(option['opposers'])}\n"
+            md_content += "\n---\n\n"
+
+        if report.get('selected_solution'):
+            md_content += f"""## Selected Solution
+
+**{report['selected_solution']}**
+
+{report.get('selection_reasoning', 'No reasoning provided.')}
+
+---
+
+"""
+
+        md_content += f"""## Implementation Steps
+
+"""
+        for i, step in enumerate(report.get('implementation_steps', []), 1):
+            md_content += f"{i}. {step}\n"
+
+        if not report.get('implementation_steps'):
+            md_content += "No implementation steps defined.\n"
+
+        md_content += f"""
+
+## Risks & Mitigations
+
+"""
+        for risk in report.get('risks_and_mitigations', []):
+            md_content += f"- {risk}\n"
+
+        if not report.get('risks_and_mitigations'):
+            md_content += "No risks identified.\n"
+
+        md_content += f"""
+
+## Action Items
+
+"""
+        for i, item in enumerate(report.get('action_items', []), 1):
+            md_content += f"{i}. [ ] {item}\n"
+
+        if not report.get('action_items'):
+            md_content += "No action items defined.\n"
+
+        md_content += f"""
+
+---
+
+## Segment Reports
+
+"""
+        for seg in report.get('segment_reports', []):
+            md_content += f"""### Segment {seg.get('segment_number', '?')}
+
+{seg.get('summary', 'No summary available.')}
+
+"""
+            if seg.get('key_developments'):
+                md_content += "**Key Developments:**\n"
+                for dev in seg['key_developments']:
+                    md_content += f"- {dev}\n"
+                md_content += "\n"
+
+            if seg.get('decisions_made'):
+                md_content += "**Decisions Made:**\n"
+                for dec in seg['decisions_made']:
+                    md_content += f"- {dec}\n"
+                md_content += "\n"
+
+        md_content += f"""
+
+---
+
+## Agent Analyses
+
+"""
+        for agent in report.get('agent_analyses', []):
+            md_content += f"""### {agent.get('agent_name', 'Unknown')} ({agent.get('persona', 'Unknown')})
+
+**Stance:** {agent.get('stance', 'N/A')}
+
+"""
+            if agent.get('critical_points'):
+                md_content += "**Critical Points:**\n"
+                for point in agent['critical_points']:
+                    md_content += f"- {point}\n"
+                md_content += "\n"
+
+            if agent.get('tools_used'):
+                md_content += f"**Tools Used:** {', '.join(agent['tools_used'])}\n"
+
+            md_content += "\n---\n\n"
+
+        md_content += f"""## Key Points
+
+"""
+        for point in report.get('key_points', []):
+            md_content += f"- {point}\n"
+
+        if report.get('disagreements'):
+            md_content += f"""
+
+## Areas of Disagreement
+
+"""
+            for d in report['disagreements']:
+                md_content += f"- {d}\n"
+
+        md_content += f"""
+
+---
+
+## Final Recommendation
+
+{report.get('final_recommendation', 'No recommendation available.')}
+
+---
+
+*Generated by Agent Council*
+"""
+
+        # Create response
+        buffer = StringIO(md_content)
+        buffer.seek(0)
+
+        return StreamingResponse(
+            buffer,
+            media_type="text/markdown",
+            headers={
+                "Content-Disposition": f"attachment; filename=report_{session_id}.md"
+            }
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate PDF: {str(e)}")

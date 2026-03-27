@@ -63,37 +63,76 @@ export function SessionsPanel() {
 
   const viewReport = async (sessionId: string) => {
     try {
+      // First try to get existing report
       const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/report`);
-      if (!response.ok) {
-        alert('Report not available yet. Wait for discussion to complete.');
+      if (response.ok) {
+        const report = await response.json();
+        setComprehensiveReport(report);
+        setCurrentSessionId(sessionId);
+        setViewMode('report');
         return;
       }
-      const report = await response.json();
-      setComprehensiveReport(report);
-      setCurrentSessionId(sessionId);
-      setViewMode('report');
+
+      // If no report exists, generate one on-demand
+      if (response.status === 404) {
+        if (confirm('No report exists for this session. Generate one now?')) {
+          await generateReport(sessionId);
+        }
+        return;
+      }
+
+      throw new Error('Failed to load report');
     } catch (error) {
       console.error('Failed to load report:', error);
       alert('Failed to load report');
     }
   };
 
-  const downloadReportPDF = async (sessionId: string, topic: string) => {
+  const generateReport = async (sessionId: string, customInstructions?: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/report`);
-      if (!response.ok) {
-        alert('Report not available yet. Wait for discussion to complete.');
-        return;
-      }
-      const report = await response.json();
+      setLoading(true);
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/generate-report`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ custom_instructions: customInstructions }),
+      });
 
-      // Generate PDF content
-      const pdfContent = generatePDFContent(report);
-      const blob = new Blob([pdfContent], { type: 'text/html' });
+      if (!response.ok) {
+        throw new Error('Failed to generate report');
+      }
+
+      const data = await response.json();
+      if (data.success && data.report) {
+        setComprehensiveReport(data.report);
+        setCurrentSessionId(sessionId);
+        setViewMode('report');
+      }
+    } catch (error) {
+      console.error('Failed to generate report:', error);
+      alert('Failed to generate report');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const downloadReportMD = async (sessionId: string, topic: string) => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/report-pdf`);
+      if (!response.ok) {
+        if (response.status === 404) {
+          if (confirm('No report exists. Generate one first?')) {
+            await generateReport(sessionId);
+          }
+          return;
+        }
+        throw new Error('Failed to download report');
+      }
+
+      const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `report-${sessionId}.html`;
+      a.download = `report-${sessionId}.md`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -102,78 +141,6 @@ export function SessionsPanel() {
       console.error('Failed to download report:', error);
       alert('Failed to download report');
     }
-  };
-
-  const generatePDFContent = (report: any) => {
-    return `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Solutioning Report - ${report.topic}</title>
-  <style>
-    body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
-    h1 { color: #333; border-bottom: 2px solid #333; padding-bottom: 10px; }
-    h2 { color: #555; margin-top: 30px; }
-    h3 { color: #666; }
-    .section { margin: 20px 0; padding: 15px; background: #f5f5f5; border-radius: 8px; }
-    .highlight { background: #e8f5e9; border-left: 4px solid #4caf50; padding: 15px; margin: 15px 0; }
-    ul { line-height: 1.8; }
-    .meta { color: #888; font-size: 0.9em; }
-  </style>
-</head>
-<body>
-  <h1>Solutioning Report</h1>
-  <p class="meta">Topic: ${report.topic}</p>
-  <p class="meta">Date: ${new Date(report.end_time).toLocaleString()}</p>
-  <p class="meta">Turns: ${report.total_turns}</p>
-
-  <div class="section">
-    <h2>Problem Statement</h2>
-    <p>${report.problem_statement || 'N/A'}</p>
-  </div>
-
-  <div class="highlight">
-    <h2>Final Answer</h2>
-    <p>${report.final_answer || 'N/A'}</p>
-  </div>
-
-  <div class="section">
-    <h2>Justification</h2>
-    <p>${report.justification || 'N/A'}</p>
-  </div>
-
-  ${report.solution_options?.length ? `
-  <div class="section">
-    <h2>Solution Options</h2>
-    ${report.solution_options.map((opt: any) => `
-      <h3>${opt.option_name} ${opt.option_name === report.selected_solution ? '(Selected)' : ''}</h3>
-      <p>${opt.description}</p>
-      <p><strong>Pros:</strong> ${opt.pros.join(', ')}</p>
-      <p><strong>Cons:</strong> ${opt.cons.join(', ')}</p>
-    `).join('')}
-  </div>
-  ` : ''}
-
-  ${report.implementation_steps?.length ? `
-  <div class="section">
-    <h2>Implementation Steps</h2>
-    <ol>
-      ${report.implementation_steps.map((step: string) => `<li>${step}</li>`).join('')}
-    </ol>
-  </div>
-  ` : ''}
-
-  ${report.action_items?.length ? `
-  <div class="section">
-    <h2>Action Items</h2>
-    <ul>
-      ${report.action_items.map((item: string) => `<li>${item}</li>`).join('')}
-    </ul>
-  </div>
-  ` : ''}
-</body>
-</html>`;
   };
 
   if (loading) {
@@ -244,14 +211,21 @@ export function SessionsPanel() {
                       size="sm"
                       onClick={() => viewReport(session.id)}
                     >
-                      Report
+                      View Report
                     </Button>
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => downloadReportPDF(session.id, session.topic)}
+                      onClick={() => generateReport(session.id)}
                     >
-                      Download
+                      Generate Report
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => downloadReportMD(session.id, session.topic)}
+                    >
+                      Download MD
                     </Button>
                     <Button
                       variant="ghost"

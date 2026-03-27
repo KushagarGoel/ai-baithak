@@ -219,8 +219,6 @@ export const AVAILABLE_MODELS = [
   'open-large',
   'glm-latest',
   'minimaxai/minimax-m2',
-  'anthropic/claude-3-haiku-20240307',
-  'anthropic/claude-3-sonnet-20240229',
   'openai/gpt-4o',
   'openai/gpt-4o-mini',
 ];
