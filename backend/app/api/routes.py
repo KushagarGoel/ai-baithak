@@ -382,12 +382,22 @@ async def download_report_pdf(session_id: str):
         PDF file download
     """
     try:
-        # Get existing report or generate one
+        # Get existing report from database (fresh data)
         report_service = ReportService()
         report = report_service.get_existing_report(session_id)
 
         if not report:
             raise HTTPException(status_code=404, detail="Report not found. Generate a report first.")
+
+        # Refresh from database to ensure we have latest
+        session_data = db.load_session_full(session_id)
+        if session_data and session_data.get('summary'):
+            try:
+                summary_data = json.loads(session_data['summary'])
+                # Merge fresh summary data
+                report.update(summary_data)
+            except json.JSONDecodeError:
+                pass
 
         # Generate PDF (placeholder - will implement with proper PDF library)
         # For now, return markdown as a downloadable file

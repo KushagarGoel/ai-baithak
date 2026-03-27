@@ -6,7 +6,10 @@ from typing import Optional
 from litellm import completion
 
 from app.core.database import db
-from app.models.schemas import DiscussionSummary, DiscussionTurn, DiscussionSegment
+from app.models.schemas import (
+    DiscussionSummary, DiscussionTurn, DiscussionSegment,
+    SegmentReport, SolutionOption, AgentAnalysis
+)
 
 
 class ReportService:
@@ -17,10 +20,7 @@ class ReportService:
 
     def _get_model_name(self, config_data: dict) -> str:
         """Get properly formatted model name using same logic as agent."""
-        # Get model from config or use default
         orchestrator_model = config_data.get('orchestrator_model', 'openai/gpt-4o-mini')
-
-        # Use self.litellm_proxy (same as agent.py lines 125-128)
         if self.litellm_proxy and not orchestrator_model.startswith("openai/"):
             return f"openai/{orchestrator_model}"
         return orchestrator_model
@@ -31,22 +31,12 @@ class ReportService:
         custom_instructions: Optional[str] = None,
         model: Optional[str] = None
     ) -> DiscussionSummary:
-        """Generate a comprehensive report for a session.
-
-        Args:
-            session_id: The session ID
-            custom_instructions: Optional user instructions for report customization
-            model: The model to use for generation (if None, uses config's orchestrator_model)
-
-        Returns:
-            DiscussionSummary with the generated report
-        """
+        """Generate a comprehensive report for a session."""
         # Load session data
         session_data = db.load_session_full(session_id)
         if not session_data:
             raise ValueError(f"Session {session_id} not found")
 
-        # Parse data
         topic = session_data.get('topic', 'Unknown Topic')
         turns_data = session_data.get('turns', [])
         segments_data = session_data.get('segments', [])
@@ -54,147 +44,38 @@ class ReportService:
         if isinstance(config_data, str):
             config_data = json.loads(config_data)
 
-        # Get model using same logic as orchestrator
         model = model or self._get_model_name(config_data)
 
-        # Convert to objects
         turns = [DiscussionTurn(**t) if isinstance(t, dict) else t for t in turns_data]
         segments = [DiscussionSegment(**s) if isinstance(s, dict) else s for s in segments_data]
 
-        # Build discussion text with segment markers
-        discussion_text = ""
-        current_segment = 0
-        for t in turns:
-            if t.segment != current_segment:
-                current_segment = t.segment
-                discussion_text += f"\n\n=== SEGMENT {current_segment} ===\n\n"
-            discussion_text += f"{t.agent_name} ({t.persona}): {t.content}\n\n"
+        # Build structured segment reports
+        segment_reports = await self._build_segment_reports(turns, segments, model)
 
-        # Build segment reports base
-        segment_reports = []
-        for seg in segments:
-            segment_turns = [t for t in turns if t.segment == seg.segment_number]
-            seg_text = "\n".join([f"{t.agent_name}: {t.content}" for t in segment_turns[:10]])
+        # Build agent participation map
+        agent_participation = self._build_agent_participation(turns)
 
-            # Generate segment summary
-            segment_summary = await self._generate_segment_summary(
-                seg.segment_number, seg_text, seg.summary, model
-            )
-
-            agent_contributions = {}
-            for turn in segment_turns:
-                if turn.agent_name not in agent_contributions:
-                    agent_contributions[turn.agent_name] = []
-                agent_contributions[turn.agent_name].append(
-                    turn.content[:150] + "..." if len(turn.content) > 150 else turn.content
-                )
-
-            segment_reports.append({
-                "segment_number": seg.segment_number,
-                "summary": segment_summary or seg.summary or f"Segment {seg.segment_number} discussion",
-                "key_developments": [],
-                "agent_contributions": {k: v[0] for k, v in agent_contributions.items() if v},
-                "decisions_made": [],
-                "open_questions": [],
-            })
-
-        # Build fallback content
-        fallback_problem = f"Discussion on: {topic}"
-        fallback_answer = f"The council discussed '{topic}' across {len(segments)} segment(s) with {len(turns)} turns. "
-        if turns:
-            key_contributors = list(set([t.agent_name for t in turns]))[:5]
-            fallback_answer += f"Key contributors: {', '.join(key_contributors)}. "
-            for t in turns[:3]:
-                if len(t.content) > 50:
-                    fallback_answer += f"{t.agent_name} noted: {t.content[:200]}... "
-                    break
-
-        # Build custom instructions section
+        # Build analysis prompt
         custom_section = ""
         if custom_instructions:
-            custom_section = f"""
-CUSTOM USER INSTRUCTIONS:
-{custom_instructions}
+            custom_section = f"\n\nCUSTOM USER INSTRUCTIONS:\n{custom_instructions}\n\nIncorporate these into your analysis."
 
-Please incorporate these instructions into the report format and style."""
+        prompt = self._build_analysis_prompt(
+            topic=topic,
+            turns=turns,
+            segments=segments,
+            segment_reports=segment_reports,
+            agent_participation=agent_participation,
+            custom_section=custom_section
+        )
 
-        prompt = f"""You are creating a comprehensive SOLUTIONING DOCUMENT based on a multi-agent council discussion.{custom_section}
-
-TOPIC: {topic}
-
-FULL DISCUSSION TRANSCRIPT:
-{discussion_text}
-
-SEGMENT SUMMARIES:
-"""
-        for seg_report in segment_reports:
-            prompt += f"\nSegment {seg_report['segment_number']}: {seg_report['summary']}\n"
-
-        prompt += f"""
-
-Your task is to analyze this discussion and create a detailed solutioning document. Return ONLY a JSON response in this exact format:
-
-{{
-    "problem_statement": "Clear, concise statement of the problem/question - MUST be non-empty",
-    "key_points": ["Key insight 1", "Key insight 2", ...],
-    "consensus_reached": true/false,
-    "disagreements": ["Description of disagreement 1", ...],
-
-    "solution_options": [
-        {{
-            "option_name": "Name of option/solution",
-            "description": "Detailed description",
-            "pros": ["Advantage 1", ...],
-            "cons": ["Disadvantage 1", ...],
-            "supporters": ["AgentName1"],
-            "opposers": ["AgentName2"]
-        }}
-    ],
-
-    "selected_solution": "Name of selected solution or null",
-    "selection_reasoning": "Why this solution was chosen",
-
-    "agent_analyses": [
-        {{
-            "agent_name": "Agent Name",
-            "persona": "Persona type",
-            "critical_points": ["Point 1", ...],
-            "key_arguments": ["Argument 1", ...],
-            "tools_used": ["tool1", ...],
-            "stance": "supportive|opposed|neutral|skeptical"
-        }}
-    ],
-
-    "segment_analyses": [
-        {{
-            "segment_number": 1,
-            "key_developments": ["What happened"],
-            "decisions_made": ["Decisions"],
-            "open_questions": ["Questions"]
-        }}
-    ],
-
-    "final_answer": "Direct answer to original question - MUST be non-empty",
-    "justification": "Reasoning - MUST be non-empty",
-    "implementation_steps": ["Step 1", ...],
-    "risks_and_mitigations": ["Risk: ... | Mitigation: ..."],
-    "action_items": ["Action 1", ...],
-    "final_recommendation": "Executive summary - MUST be non-empty"
-}}
-
-CRITICAL: All fields marked MUST be non-empty. Even without consensus, describe what WAS discussed.
-
-FALLBACK (use if sparse):
-- Problem: {fallback_problem}
-- Summary: {fallback_answer}"""
-
-        # Call LLM using same pattern as orchestrator
+        # Call LLM
         litellm_proxy = config_data.get('litellm_proxy')
         completion_kwargs = {
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.4,
-            "max_tokens": 4000,
+            "temperature": 0.3,
+            "max_tokens": 6000,
         }
         if litellm_proxy:
             completion_kwargs["api_base"] = litellm_proxy.get('api_base')
@@ -203,8 +84,216 @@ FALLBACK (use if sparse):
         response = completion(**completion_kwargs)
         content = response.choices[0].message.content
 
-        # Parse JSON
         parsed = self._extract_json(content)
+
+        summary = self._build_summary_from_parsed(
+            parsed=parsed,
+            topic=topic,
+            turns=turns,
+            segments=segments,
+            segment_reports=segment_reports,
+            session_data=session_data
+        )
+
+        self._save_report(session_id, summary)
+        return summary
+
+    async def _build_segment_reports(
+        self,
+        turns: list[DiscussionTurn],
+        segments: list[DiscussionSegment],
+        model: str
+    ) -> list[dict]:
+        """Build proper segment reports with AI-generated summaries."""
+        segment_reports = []
+
+        for seg in segments:
+            segment_turns = [t for t in turns if t.segment == seg.segment_number]
+            if not segment_turns:
+                continue
+
+            conversation_excerpt = []
+            for t in segment_turns:
+                conversation_excerpt.append(f"{t.agent_name} ({t.persona}): {t.content[:500]}")
+
+            segment_summary = await self._generate_segment_summary(
+                seg.segment_number,
+                "\n\n".join(conversation_excerpt[:15]),
+                seg.summary,
+                model
+            )
+
+            agent_contributions = {}
+            for turn in segment_turns:
+                if turn.agent_name not in agent_contributions:
+                    # Store first contribution as string
+                    agent_contributions[turn.agent_name] = turn.content
+
+            segment_reports.append({
+                "segment_number": seg.segment_number,
+                "summary": segment_summary,
+                "key_developments": [],
+                "agent_contributions": agent_contributions,
+                "decisions_made": [],
+                "open_questions": [],
+            })
+
+        return segment_reports
+
+    def _build_agent_participation(self, turns: list[DiscussionTurn]) -> dict:
+        """Build map of agent participation."""
+        participation = {}
+        for turn in turns:
+            if turn.agent_name not in participation:
+                participation[turn.agent_name] = {
+                    "persona": turn.persona,
+                    "message_count": 0,
+                    "total_chars": 0,
+                    "key_messages": []
+                }
+            participation[turn.agent_name]["message_count"] += 1
+            participation[turn.agent_name]["total_chars"] += len(turn.content)
+            if len(participation[turn.agent_name]["key_messages"]) < 3:
+                participation[turn.agent_name]["key_messages"].append(turn.content[:300])
+        return participation
+
+    def _build_analysis_prompt(
+        self,
+        topic: str,
+        turns: list[DiscussionTurn],
+        segments: list[DiscussionSegment],
+        segment_reports: list[dict],
+        agent_participation: dict,
+        custom_section: str
+    ) -> str:
+        """Build the analysis prompt for the LLM."""
+
+        segments_text = ""
+        for seg in segment_reports:
+            segments_text += f"\n=== SEGMENT {seg['segment_number']} ===\n"
+            segments_text += f"Summary: {seg['summary']}\n"
+            segments_text += f"Agents involved: {', '.join(seg['agent_contributions'].keys())}\n"
+
+        agents_text = "\n".join([
+            f"- {name} ({data['persona']}): {data['message_count']} messages"
+            for name, data in agent_participation.items()
+        ])
+
+        prompt = f"""You are analyzing a multi-agent council discussion to create a structured solutioning report.{custom_section}
+
+TOPIC DISCUSSED: {topic}
+
+PARTICIPATING AGENTS:
+{agents_text}
+
+DISCUSSION SEGMENTS:
+{segments_text}
+
+---
+
+Your task is to produce a COMPREHENSIVE STRUCTURED ANALYSIS. Return ONLY a JSON object in this exact format:
+
+{{
+    "problem_statement": "A clear, detailed statement of what problem/question the council was addressing",
+
+    "key_points": [
+        "Key insight or finding 1",
+        "Key insight or finding 2"
+    ],
+
+    "consensus_reached": true,
+
+    "disagreements": [
+        "Description of area where agents disagreed"
+    ],
+
+    "solution_options": [
+        {{
+            "option_name": "Name of the approach/solution",
+            "description": "2-3 sentence description of this approach",
+            "pros": ["Advantage 1", "Advantage 2"],
+            "cons": ["Disadvantage 1", "Disadvantage 2"],
+            "supporters": ["AgentName1", "AgentName2"],
+            "opposers": ["AgentName3"]
+        }}
+    ],
+
+    "selected_solution": "Name of the best solution OR null if no consensus",
+    "selection_reasoning": "Why this solution was selected, or why no consensus was reached",
+
+    "agent_analyses": [
+        {{
+            "agent_name": "Agent Name",
+            "persona": "Their persona/role",
+            "stance": "supportive|opposed|neutral|skeptical",
+            "critical_points": ["Main point they argued", "Another key point"],
+            "key_arguments": ["Their primary argument", "Supporting argument"],
+            "tools_used": ["tool1", "tool2"]
+        }}
+    ],
+
+    "segment_analyses": [
+        {{
+            "segment_number": 1,
+            "key_developments": ["What was discovered/decided", "Progress made"],
+            "decisions_made": ["Decision 1"],
+            "open_questions": ["Question remaining"]
+        }}
+    ],
+
+    "final_answer": "A structured summary with:\n- Overall Approach: [brief summary]\n- Key Findings: [bullet points]\n- Recommended Path Forward: [clear recommendation]",
+
+    "justification": "Detailed reasoning for the final answer, explaining the council's thinking process",
+
+    "implementation_steps": ["Step 1: ...", "Step 2: ..."],
+
+    "risks_and_mitigations": ["Risk: ... | Mitigation: ..."],
+
+    "action_items": ["Action item 1", "Action item 2"],
+
+    "final_recommendation": "Executive summary (2-3 sentences) of the council's conclusion"
+}}
+
+---
+
+CRITICAL REQUIREMENTS:
+
+1. **solution_options MUST contain at least 2-3 distinct approaches** discussed by agents. Each must have:
+   - Clear option_name and description
+   - At least 2 pros and 2 cons
+   - Supporters and opposers from the agent list
+
+2. **agent_analyses MUST contain one entry per agent** who participated. Each must have:
+   - Their stance on the overall topic
+   - 2-3 critical points they raised
+   - Their key arguments
+
+3. **final_answer MUST be structured with bullet points** covering:
+   - Overall Approach
+   - Key Findings
+   - Recommended Path Forward
+
+4. **segment_analyses MUST analyze each segment** for:
+   - Key developments (what progress was made)
+   - Decisions made
+   - Open questions
+
+5. All string fields must be non-empty and meaningful.
+
+Analyze the segments carefully and extract these insights from the discussion."""
+
+        return prompt
+
+    def _build_summary_from_parsed(
+        self,
+        parsed: dict,
+        topic: str,
+        turns: list[DiscussionTurn],
+        segments: list[DiscussionSegment],
+        segment_reports: list[dict],
+        session_data: dict
+    ) -> DiscussionSummary:
+        """Build DiscussionSummary from parsed JSON with smart fallbacks."""
 
         # Merge segment analyses
         for seg_analysis in parsed.get("segment_analyses", []):
@@ -214,17 +303,61 @@ FALLBACK (use if sparse):
                     seg_report["decisions_made"] = seg_analysis.get("decisions_made", [])
                     seg_report["open_questions"] = seg_analysis.get("open_questions", [])
 
-        # Apply fallbacks for empty fields
-        problem_statement = parsed.get("problem_statement") or fallback_problem
-        final_answer = parsed.get("final_answer") or fallback_answer
+        # Ensure solution_options exists
+        solution_options = parsed.get("solution_options", [])
+        if not solution_options:
+            solution_options = self._infer_solution_options(turns, parsed.get("agent_analyses", []))
+
+        # Ensure agent_analyses exists
+        agent_analyses = parsed.get("agent_analyses", [])
+        if not agent_analyses:
+            agent_analyses = self._infer_agent_analyses(turns)
+
+        # Build proper final_answer
+        final_answer = parsed.get("final_answer", "")
+        if not final_answer or len(final_answer) < 200:
+            final_answer = self._build_structured_final_answer(
+                topic=topic,
+                key_points=parsed.get("key_points", []),
+                solution_options=solution_options,
+                selected_solution=parsed.get("selected_solution"),
+                agent_analyses=agent_analyses
+            )
+
+        problem_statement = parsed.get("problem_statement") or f"The council discussed: {topic}"
+
         justification = parsed.get("justification") or self._generate_justification(
-            parsed.get("consensus_reached", False), topic, parsed.get("key_points", [])
-        )
-        final_recommendation = parsed.get("final_recommendation") or self._generate_recommendation(
-            topic, parsed.get("selected_solution")
+            parsed.get("consensus_reached", False),
+            topic,
+            parsed.get("key_points", [])
         )
 
-        summary = DiscussionSummary(
+        final_recommendation = parsed.get("final_recommendation") or self._generate_recommendation(
+            topic,
+            parsed.get("selected_solution")
+        )
+
+        # Convert to proper schema objects
+        segment_report_objects = [
+            SegmentReport(
+                segment_number=seg["segment_number"],
+                summary=seg["summary"],
+                key_developments=seg.get("key_developments", []),
+                agent_contributions=seg.get("agent_contributions", {}),
+                decisions_made=seg.get("decisions_made", []),
+                open_questions=seg.get("open_questions", [])
+            ) for seg in segment_reports
+        ]
+
+        solution_option_objects = [
+            SolutionOption(**opt) for opt in solution_options
+        ] if solution_options else []
+
+        agent_analysis_objects = [
+            AgentAnalysis(**analysis) for analysis in agent_analyses
+        ] if agent_analyses else []
+
+        return DiscussionSummary(
             topic=topic,
             start_time=session_data.get('start_time', datetime.now().isoformat()),
             end_time=datetime.now().isoformat(),
@@ -234,11 +367,11 @@ FALLBACK (use if sparse):
             disagreements=parsed.get("disagreements", []),
             action_items=parsed.get("action_items", []),
             problem_statement=problem_statement,
-            solution_options=parsed.get("solution_options", []),
+            solution_options=solution_option_objects,
             selected_solution=parsed.get("selected_solution"),
             selection_reasoning=parsed.get("selection_reasoning", ""),
-            segment_reports=segment_reports,
-            agent_analyses=parsed.get("agent_analyses", []),
+            segment_reports=segment_report_objects,
+            agent_analyses=agent_analysis_objects,
             final_recommendation=final_recommendation,
             final_answer=final_answer,
             justification=justification,
@@ -246,10 +379,111 @@ FALLBACK (use if sparse):
             risks_and_mitigations=parsed.get("risks_and_mitigations", []),
         )
 
-        # Save to database
-        self._save_report(session_id, summary)
+    def _infer_solution_options(
+        self,
+        turns: list[DiscussionTurn],
+        agent_analyses: list[dict]
+    ) -> list[dict]:
+        """Infer solution options from discussion if LLM didn't provide them."""
+        agent_positions = {}
+        for turn in turns:
+            if turn.agent_name not in agent_positions:
+                agent_positions[turn.agent_name] = []
+            agent_positions[turn.agent_name].append(turn.content)
 
-        return summary
+        options = []
+        stances = ["approach", "solution", "method"]
+
+        for i, (agent_name, messages) in enumerate(list(agent_positions.items())[:3]):
+            options.append({
+                "option_name": f"{agent_name}'s {stances[i % len(stances)]}",
+                "description": f"Approach advocated by {agent_name} based on their contributions",
+                "pros": ["Detailed consideration", "Agent expertise"],
+                "cons": ["May have limitations", "Alternative viewpoints exist"],
+                "supporters": [agent_name],
+                "opposers": [a for a in agent_positions.keys() if a != agent_name][:2]
+            })
+
+        return options
+
+    def _infer_agent_analyses(self, turns: list[DiscussionTurn]) -> list[dict]:
+        """Infer agent analyses from discussion if LLM didn't provide them."""
+        agent_data = {}
+
+        for turn in turns:
+            if turn.agent_name not in agent_data:
+                agent_data[turn.agent_name] = {
+                    "persona": turn.persona,
+                    "messages": [],
+                    "tools_used": set()
+                }
+            agent_data[turn.agent_name]["messages"].append(turn.content)
+            for tool_call in turn.tool_calls:
+                agent_data[turn.agent_name]["tools_used"].add(tool_call.name)
+
+        analyses = []
+        for agent_name, data in agent_data.items():
+            key_messages = [data["messages"][0]] if data["messages"] else ["Participated in discussion"]
+            if len(data["messages"]) > 1:
+                key_messages.append(data["messages"][-1])
+
+            analyses.append({
+                "agent_name": agent_name,
+                "persona": data["persona"],
+                "stance": "neutral",
+                "critical_points": [m[:150] + "..." if len(m) > 150 else m for m in key_messages[:2]],
+                "key_arguments": ["Contributed to the discussion"],
+                "tools_used": list(data["tools_used"])
+            })
+
+        return analyses
+
+    def _build_structured_final_answer(
+        self,
+        topic: str,
+        key_points: list[str],
+        solution_options: list[dict],
+        selected_solution: Optional[str],
+        agent_analyses: list[dict]
+    ) -> str:
+        """Build a structured final answer with bullet points."""
+
+        answer = f"""## Overall Approach
+
+The council engaged in a structured discussion on "{topic}" to explore multiple perspectives and arrive at a well-reasoned conclusion.
+
+## Key Findings
+
+"""
+        for point in key_points[:5]:
+            answer += f"- {point}\n"
+
+        if not key_points:
+            answer += "- Multiple perspectives were considered\n"
+            answer += "- Various approaches were evaluated\n"
+
+        answer += "\n## Agent Perspectives\n\n"
+        for analysis in agent_analyses[:4]:
+            answer += f"**{analysis['agent_name']}** ({analysis.get('persona', 'Unknown')}):\n"
+            answer += f"- Stance: {analysis.get('stance', 'neutral')}\n"
+            if analysis.get('critical_points'):
+                answer += f"- Key Point: {analysis['critical_points'][0][:100]}...\n"
+            answer += "\n"
+
+        answer += "## Solution Options Considered\n\n"
+        for opt in solution_options[:3]:
+            answer += f"**{opt.get('option_name', 'Unnamed')}**\n"
+            answer += f"- Pros: {', '.join(opt.get('pros', ['None'])[:2])}\n"
+            answer += f"- Cons: {', '.join(opt.get('cons', ['None'])[:2])}\n"
+            answer += f"- Supported by: {', '.join(opt.get('supporters', ['Unknown']))}\n\n"
+
+        answer += "\n## Recommended Path Forward\n\n"
+        if selected_solution:
+            answer += f"The council recommends proceeding with: **{selected_solution}**\n\n"
+        else:
+            answer += "The council suggests further exploration of the discussed options.\n\n"
+
+        return answer
 
     async def _generate_segment_summary(
         self,
@@ -265,11 +499,11 @@ FALLBACK (use if sparse):
         if not segment_text:
             return f"Segment {segment_number} - No discussion content"
 
-        prompt = f"""Summarize this discussion segment in 2-3 sentences:
+        prompt = f"""Summarize this discussion segment in 2-3 sentences, focusing on what was discussed and any decisions or insights:
 
 {segment_text[:2000]}
 
-Provide a concise summary of what was discussed:"""
+Provide a concise summary:"""
 
         try:
             completion_kwargs = {

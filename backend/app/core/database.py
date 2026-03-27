@@ -798,6 +798,16 @@ class SessionDatabase:
             """, (agent_id,)).fetchall()
             return [dict(r) for r in rows]
 
+    def save_session_summary(self, session_id: str, summary: dict):
+        """Save or overwrite the summary for a session."""
+        summary_json = json.dumps(summary) if summary else None
+        with self._get_conn() as conn:
+            conn.execute(
+                "UPDATE sessions SET summary = ?, updated_at = CURRENT_TIMESTAMP WHERE session_id = ?",
+                (summary_json, session_id)
+            )
+            return conn.total_changes > 0
+
 
 # Global database instance
 db = SessionDatabase()
