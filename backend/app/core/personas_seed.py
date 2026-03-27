@@ -37,9 +37,9 @@ def seed_personas():
     # Create MCP servers first (if not exist)
     _ensure_mcp_servers()
 
-    # Get existing agent IDs
+    # Get existing agent IDs (column is 'id', not 'agent_id')
     existing_agents = db.list_agents(active_only=True)
-    existing_agent_ids = {a['agent_id'] for a in existing_agents}
+    existing_agent_ids = {a.get('id') or a.get('agent_id') for a in existing_agents}
     print(f"[SEED] Found {len(existing_agent_ids)} existing agents")
 
     added_count = 0

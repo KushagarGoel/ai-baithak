@@ -236,9 +236,24 @@ class WebSearchTool(BaseTool):
             "required": ["query"],
         }
 
-    async def execute(self, query: str, max_results: int = 5) -> ToolResult:
+    async def execute(self, query: str = None, max_results: int = 5, **kwargs) -> ToolResult:
+        """Search the web using DuckDuckGo.
+
+        Args:
+            query: Search query string
+            max_results: Maximum number of results (default: 5, max: 10)
+            **kwargs: Additional arguments (ignored)
+        """
         import logging
         logger = logging.getLogger(__name__)
+
+        if not query:
+            return ToolResult(
+                success=False,
+                data=None,
+                error="Missing required parameter: 'query'"
+            )
+
         logger.info(f"[WEB_SEARCH] Starting search for: {query}")
 
         # Try new ddgs library first, then fallback to duckduckgo_search
@@ -319,17 +334,33 @@ class WebFetchTool(BaseTool):
             "required": ["url"],
         }
 
-    async def execute(self, url: str) -> ToolResult:
+    async def execute(self, url: str = None, prompt: str = None, **kwargs) -> ToolResult:
+        """Fetch web page content.
+
+        Args:
+            url: The URL to fetch (preferred parameter)
+            prompt: Alternative parameter name that LLMs sometimes use
+            **kwargs: Additional arguments (ignored)
+        """
+        # Handle LLM passing 'prompt' instead of 'url'
+        target_url = url or prompt
+        if not target_url:
+            return ToolResult(
+                success=False,
+                data=None,
+                error="Missing required parameter: 'url' (or 'prompt' as alias)"
+            )
+
         try:
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=self.timeout) as response:
+                async with session.get(target_url, timeout=self.timeout) as response:
                     if response.status != 200:
                         return ToolResult(success=False, data=None, error=f"HTTP {response.status}")
 
                     content = await response.text()
                     return ToolResult(
                         success=True,
-                        data={"url": url, "content": content[:10000], "content_length": len(content)}
+                        data={"url": target_url, "content": content[:10000], "content_length": len(content)}
                     )
 
         except Exception as e:
@@ -351,7 +382,20 @@ class ExecutePythonTool(BaseTool):
             "required": ["code"],
         }
 
-    async def execute(self, code: str) -> ToolResult:
+    async def execute(self, code: str = None, **kwargs) -> ToolResult:
+        """Execute Python code.
+
+        Args:
+            code: Python code to execute
+            **kwargs: Additional arguments (ignored)
+        """
+        if not code:
+            return ToolResult(
+                success=False,
+                data=None,
+                error="Missing required parameter: 'code'"
+            )
+
         try:
             import io
             import sys
