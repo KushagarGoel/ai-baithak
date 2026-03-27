@@ -39,11 +39,13 @@ class CouncilAgent:
         config: AgentConfig,
         tool_server: MCPToolServer,
         litellm_proxy: Optional[Any] = None,
+        agent_id: str = None,
     ):
         self.config = config
         self.persona = get_persona(config.persona)
         self.tool_server = tool_server
         self.litellm_proxy = litellm_proxy
+        self.agent_id = agent_id
         self.messages: list[AgentMessage] = []
         self.tokens_used = 0
         self._stop_requested = False

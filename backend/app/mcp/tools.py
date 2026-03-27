@@ -416,49 +416,97 @@ class ExecutePythonTool(BaseTool):
 
 
 class MCPToolServer:
-    """MCP-compatible tool server."""
+    """MCP-compatible tool server.
 
-    def __init__(self, base_path: str = "."):
+    Integrates built-in tools (web_search, web_fetch, execute_python) with
+    MCP server tools (filesystem, memory, puppeteer, etc.) from the registry.
+    """
+
+    def __init__(self, base_path: str = ".", agent_id: str = None):
         self.tools: dict[str, BaseTool] = {}
         self.base_path = base_path
+        self.agent_id = agent_id
         self._register_default_tools()
 
     def _register_default_tools(self):
-        """Register default tools.
+        """Register default built-in tools.
 
-        Note: Filesystem operations (read_file, write_file, list_directory)
-        are provided by the filesystem MCP server, not built-in tools.
+        Note: MCP server tools (filesystem, memory, puppeteer) are loaded
+        dynamically from the MCP registry and included in get_tools_description().
         """
         self.register(WebSearchTool())
         self.register(WebFetchTool())
         self.register(ExecutePythonTool())
 
     def register(self, tool: BaseTool):
-        """Register a tool."""
+        """Register a built-in tool."""
         self.tools[tool.name] = tool
 
     def get(self, name: str) -> Optional[BaseTool]:
-        """Get a tool by name."""
+        """Get a built-in tool by name."""
         return self.tools.get(name)
 
     def list_tools(self) -> list[str]:
-        """List all available tool names."""
+        """List all built-in tool names."""
         return list(self.tools.keys())
 
     def get_schemas(self) -> list[dict]:
-        """Get schemas for all tools."""
+        """Get schemas for built-in tools."""
         return [tool.get_schema() for tool in self.tools.values()]
 
     async def execute(self, tool_name: str, **kwargs) -> ToolResult:
-        """Execute a tool by name."""
+        """Execute a tool by name.
+
+        First tries built-in tools, then falls back to MCP server tools.
+        """
+        # Try built-in tools first
         tool = self.get(tool_name)
-        if not tool:
-            return ToolResult(success=False, data=None, error=f"Tool not found: {tool_name}")
-        return await tool.execute(**kwargs)
+        if tool:
+            return await tool.execute(**kwargs)
+
+        # Fall back to MCP registry tools
+        from app.mcp.registry import mcp_registry
+
+        # Find which MCP server has this tool for this agent
+        if self.agent_id:
+            mcp_tools = mcp_registry.get_all_tools_for_agent(self.agent_id)
+            for mcp_tool in mcp_tools:
+                if mcp_tool.name == tool_name:
+                    result = await mcp_registry.execute_tool(
+                        mcp_tool.mcp_server_id,
+                        tool_name,
+                        kwargs
+                    )
+                    return ToolResult(
+                        success=result.success,
+                        data=result.data,
+                        error=result.error
+                    )
+
+        return ToolResult(success=False, data=None, error=f"Tool not found: {tool_name}")
 
     def get_tools_description(self) -> str:
-        """Get a formatted description of all tools."""
+        """Get a formatted description of all tools available to this agent.
+
+        Includes both built-in tools and MCP server tools the agent has access to.
+        """
         descriptions = []
+
+        # Add built-in tools
         for name, tool in self.tools.items():
             descriptions.append(f"- {name}: {tool.description}")
+
+        # Add MCP server tools
+        from app.mcp.registry import mcp_registry
+
+        if self.agent_id:
+            mcp_tools = mcp_registry.get_all_tools_for_agent(self.agent_id)
+            for tool in mcp_tools:
+                descriptions.append(f"- {tool.name}: {tool.description} (via {tool.mcp_server_name})")
+        else:
+            # If no agent_id, show all available MCP tools (for backwards compatibility)
+            all_mcp_tools = mcp_registry.get_all_tools()
+            for tool in all_mcp_tools:
+                descriptions.append(f"- {tool.name}: {tool.description} (via {tool.mcp_server_name})")
+
         return "\n".join(descriptions)

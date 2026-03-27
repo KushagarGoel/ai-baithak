@@ -171,6 +171,7 @@ class AgentConfig(BaseModel):
     temperature: Optional[float] = None
     max_tokens: Optional[int] = None
     tools_enabled: bool = True
+    agent_id: Optional[str] = None  # Database agent ID for MCP access
 
 
 class CouncilConfig(BaseModel):

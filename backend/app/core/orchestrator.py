@@ -30,7 +30,6 @@ class CouncilOrchestrator:
 
     def __init__(self, config: CouncilConfig, load_from_transcript: bool = True):
         self.config = config
-        self.tool_server = MCPToolServer(config.workspace_path)
         self.agents: list[CouncilAgent] = []
         self.turns: list[DiscussionTurn] = []
         self.segments: list[DiscussionSegment] = []
@@ -182,12 +181,32 @@ class CouncilOrchestrator:
         print(f"[SESSION LOADED] Restored {len(self.turns)} turns from database")
 
     def _setup_agents(self):
-        """Initialize all council agents."""
+        """Initialize all council agents with per-agent tool servers."""
+        from app.core.database import db
+
         for agent_config in self.config.agents:
+            # Resolve agent_id from persona if not provided
+            agent_id = agent_config.agent_id
+            if not agent_id:
+                # Look up agent by persona name
+                persona_key = agent_config.persona.lower().replace(" ", "_")
+                agent_id = f"persona_{persona_key}"
+                # Verify it exists in database
+                agent_data = db.get_agent(agent_id)
+                if not agent_data:
+                    # Try alternate format
+                    agent_id = None
+
+            # Create per-agent tool server with agent_id for MCP access
+            tool_server = MCPToolServer(
+                base_path=self.config.workspace_path,
+                agent_id=agent_id
+            )
             agent = CouncilAgent(
                 config=agent_config,
-                tool_server=self.tool_server,
+                tool_server=tool_server,
                 litellm_proxy=self.config.litellm_proxy,
+                agent_id=agent_id,
             )
             self.agents.append(agent)
 
@@ -445,6 +464,11 @@ Let's begin."""
         """Start a new discussion segment."""
         detailed_summary = await self._generate_detailed_segment_summary()
         concise_summary = await self._generate_concise_summary()
+
+        # Generate key insights for the segment that is ending
+        # Must do this BEFORE incrementing current_segment
+        print(f"[SEGMENT] Generating end-of-segment insights for segment {self.current_segment}")
+        await self._save_key_insights_for_segment(progress_callback)
 
         # Close current segment
         current_seg = self.segments[self.current_segment]
@@ -845,6 +869,165 @@ Requirements:
 
         except Exception as e:
             print(f"[KEY INSIGHTS ERROR] {e}")
+            import traceback
+            traceback.print_exc()
+
+    async def _save_key_insights_for_segment(self, progress_callback=None):
+        """Generate and save key insights for the CURRENT segment (called at segment end).
+
+        This method explicitly uses self.current_segment to ensure insights are saved
+        for the segment that is ending, not any future segment.
+        """
+        print(f"[SEGMENT INSIGHTS DEBUG] Starting for segment {self.current_segment}")
+
+        if not self.config.session_id:
+            print("[SEGMENT INSIGHTS DEBUG] No session_id, skipping")
+            return
+
+        # Get non-orchestrator turns from CURRENT segment (the one ending)
+        segment_number = self.current_segment
+        segment_turns = [t for t in self.turns if t.segment == segment_number and t.agent_name != "Orchestrator"]
+        print(f"[SEGMENT INSIGHTS DEBUG] Found {len(segment_turns)} non-orchestrator turns in segment {segment_number}")
+
+        if len(segment_turns) < 2:
+            print(f"[SEGMENT INSIGHTS DEBUG] Not enough turns (< 2), skipping")
+            return
+
+        # Filter out error messages, tool debug info, and non-substantive content
+        def is_substantive_content(content: str) -> bool:
+            content_lower = content.lower().strip()
+            if content_lower.startswith("[error:") or "tool rejected" in content_lower:
+                return False
+            if "invoking" in content_lower and "incorrect parameter" in content_lower:
+                return False
+            if content_lower.startswith("the tool rejects"):
+                return False
+            if "suggesting the actual parameter" in content_lower:
+                return False
+            if len(content) < 30:
+                return False
+            if content_lower.startswith("["):
+                return False
+            return True
+
+        substantive_turns = [t for t in segment_turns if is_substantive_content(t.content)]
+        print(f"[SEGMENT INSIGHTS DEBUG] Found {len(substantive_turns)} substantive turns after filtering")
+
+        if len(substantive_turns) < 2:
+            print(f"[SEGMENT INSIGHTS DEBUG] Not enough substantive turns after filtering, skipping")
+            return
+
+        # Get recent discussion from this segment
+        recent_turns = substantive_turns[-10:]
+        discussion_text = "\n".join([f"{t.agent_name}: {t.content[:500]}" for t in recent_turns])
+
+        prompt = f"""You are an expert at extracting key insights from discussions.
+
+Analyze this discussion segment and identify 3-5 key insights worth preserving:
+
+{discussion_text}
+
+To save these insights, you MUST use the save_insights tool with this exact format:
+
+{{"tool_calls": [{{"name": "save_insights", "arguments": {{"insights": ["Insight 1 sentence", "Insight 2 sentence", "Insight 3 sentence"]}}}}]}}
+
+Requirements:
+- Extract 3-5 substantive insights, arguments, or findings
+- Each insight must be a single clear sentence
+- Use ONLY the tool_calls format above, no other text"""
+
+        try:
+            model = self._get_orchestrator_model()
+            print(f"[SEGMENT INSIGHTS DEBUG] Calling LLM for segment {segment_number}")
+            completion_kwargs = {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.3,
+                "max_tokens": 500,
+            }
+            if self.config.litellm_proxy:
+                completion_kwargs["api_base"] = self.config.litellm_proxy.api_base
+                completion_kwargs["api_key"] = self.config.litellm_proxy.api_key
+
+            response = completion(**completion_kwargs)
+            insights_content = response.choices[0].message.content.strip()
+            print(f"[SEGMENT INSIGHTS DEBUG] LLM response: {len(insights_content)} chars")
+
+            if hasattr(response, 'usage') and response.usage:
+                self.total_tokens_used += response.usage.total_tokens
+
+            # Parse insights
+            insights_list = []
+            try:
+                try:
+                    parsed = json.loads(insights_content)
+                    if "tool_calls" in parsed:
+                        for call in parsed["tool_calls"]:
+                            if call.get("name") == "save_insights":
+                                insights_list = call.get("arguments", {}).get("insights", [])
+                                break
+                except json.JSONDecodeError:
+                    pass
+
+                if not insights_list:
+                    tool_calls = self._extract_tool_calls(insights_content)
+                    for call in tool_calls:
+                        if call.get("name") == "save_insights":
+                            args = call.get("arguments", {})
+                            insights_list = args.get("insights", [])
+                            break
+            except Exception as e:
+                print(f"[SEGMENT INSIGHTS DEBUG] Parse error: {e}")
+
+            if not insights_list:
+                print(f"[SEGMENT INSIGHTS DEBUG] No insights found")
+                return
+
+            print(f"[SEGMENT INSIGHTS DEBUG] Saving {len(insights_list)} insights for segment {segment_number}")
+
+            # Save to database with EXPLICIT segment number
+            insight_numbers = db.save_insights_batch(
+                session_id=self.config.session_id,
+                insights=insights_list,
+                source='orchestrator',
+                turn_number=self.current_turn,
+                segment=segment_number  # Explicitly use the segment number
+            )
+
+            # Save to file
+            session_folder = os.path.join(self.config.workspace_path, "chats", self.config.session_id)
+            os.makedirs(session_folder, exist_ok=True)
+            insights_file = os.path.join(session_folder, "key_insights.md")
+
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            with open(insights_file, "a") as f:
+                f.write(f"\n## Key Insights (Segment {segment_number + 1} End) - {timestamp}\n\n")
+                for i, insight in enumerate(insights_list, 1):
+                    f.write(f"{i}. {insight}\n")
+                f.write("\n---\n")
+
+            print(f"[SEGMENT INSIGHTS] Saved {len(insights_list)} insights for segment {segment_number}")
+
+            # Notify via callback
+            if progress_callback:
+                from app.models.schemas import KeyInsight
+                insight_objects = [
+                    KeyInsight(
+                        insight_number=num,
+                        content=content,
+                        source='orchestrator',
+                        turn_number=self.current_turn,
+                        segment=segment_number,
+                    )
+                    for num, content in zip(insight_numbers, insights_list)
+                ]
+                await progress_callback("insights", {
+                    "insights": insight_objects,
+                    "total_count": db.get_insight_count(self.config.session_id)
+                })
+
+        except Exception as e:
+            print(f"[SEGMENT INSIGHTS ERROR] {e}")
             import traceback
             traceback.print_exc()
 
