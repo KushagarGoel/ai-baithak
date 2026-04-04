@@ -4,41 +4,136 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ─── Light theme (default) ───────────────────────────────────────────────── */
 :root {
-  --background: #0b0e14;
-  --surface: #111520;
-  --surface-container-lowest: #000000;
-  --surface-container-low: #10131a;
-  --surface-container: #161a21;
-  --surface-container-high: #1c2028;
-  --surface-container-highest: #22262f;
-  --surface-bright: #282c36;
-  --primary: #4dc9f0;
-  --primary-dim: #2ab8e0;
-  --primary-container: #00e0ff;
-  --secondary: #3fff8b;
-  --secondary-dim: #24f07e;
-  --secondary-container: #006d35;
-  --tertiary: #a68cff;
-  --tertiary-dim: #7e51ff;
-  --tertiary-container: #7c4dff;
-  --error: #ff716c;
-  --error-dim: #d7383b;
-  --error-container: #9f0519;
-  --outline: #73757d;
-  --outline-variant: #45484f;
-  --on-background: #ecedf6;
-  --on-surface: #ecedf6;
-  --on-surface-variant: #a9abb3;
-  --on-primary: #0a2a33;
-  --on-secondary: #005d2c;
-  --on-error: #490006;
-  --success: #3fff8b;
-  --success-container: #006d35;
-  --warning: #ffc107;
-  --warning-container: #7d5a00;
-  --info: #4dc9f0;
-  --info-container: #005561;
+  /* Backgrounds — white / slate palette */
+  --background: 248 250 252;             /* slate-50  */
+  --surface: 255 255 255;                /* white     */
+  --surface-dim: 226 232 240;            /* slate-200 */
+  --surface-bright: 241 245 249;         /* slate-100 */
+  --surface-container-lowest: 255 255 255;   /* white     */
+  --surface-container-low: 248 250 252;      /* slate-50  */
+  --surface-container: 241 245 249;          /* slate-100 */
+  --surface-container-high: 226 232 240;     /* slate-200 */
+  --surface-container-highest: 203 213 225;  /* slate-300 */
+
+  /* Primary — blue */
+  --primary: 37 99 235;                  /* blue-600  */
+  --primary-dim: 29 78 216;             /* blue-700  */
+  --primary-container: 59 130 246;      /* blue-500  */
+  --primary-fixed: 59 130 246;          /* blue-500  */
+  --primary-fixed-dim: 37 99 235;       /* blue-600  */
+
+  /* Secondary — emerald */
+  --secondary: 16 185 129;              /* emerald-500 */
+  --secondary-dim: 5 150 105;           /* emerald-600 */
+  --secondary-container: 167 243 208;   /* emerald-200 */
+  --secondary-fixed: 16 185 129;        /* emerald-500 */
+  --secondary-fixed-dim: 5 150 105;     /* emerald-600 */
+
+  /* Tertiary — violet */
+  --tertiary: 124 58 237;               /* violet-600  */
+  --tertiary-dim: 109 40 217;           /* violet-700  */
+  --tertiary-container: 221 214 254;    /* violet-200  */
+  --tertiary-fixed: 139 92 246;         /* violet-500  */
+  --tertiary-fixed-dim: 124 58 237;     /* violet-600  */
+
+  /* Error — red */
+  --error: 220 38 38;                   /* red-600   */
+  --error-dim: 185 28 28;              /* red-700   */
+  --error-container: 254 202 202;       /* red-200   */
+
+  /* Outlines */
+  --outline: 100 116 139;               /* slate-500 */
+  --outline-variant: 148 163 184;       /* slate-400 */
+
+  /* On-colors */
+  --on-background: 15 23 42;            /* slate-900  */
+  --on-surface: 15 23 42;              /* slate-900  */
+  --on-surface-variant: 71 85 105;      /* slate-600  */
+  --on-primary: 255 255 255;            /* white      */
+  --on-secondary: 6 78 59;             /* emerald-900 */
+  --on-error: 255 255 255;              /* white      */
+
+  /* Semantic */
+  --success: 16 185 129;               /* emerald-500 */
+  --success-container: 167 243 208;    /* emerald-200 */
+  --warning: 245 158 11;               /* amber-500   */
+  --warning-container: 254 243 199;    /* amber-100   */
+  --info: 59 130 246;                  /* blue-500    */
+  --info-container: 219 234 254;       /* blue-100    */
+
+  /* Shadows */
+  --shadow-ambient: 0 2px 8px rgba(0, 0, 0, 0.08), 0 0 20px rgba(0, 0, 0, 0.04);
+  --shadow-glow-primary: 0 0 20px rgba(37, 99, 235, 0.25);
+  --shadow-glow-primary-subtle: 0 0 5px rgba(37, 99, 235, 0.12);
+  --shadow-glow-secondary: 0 0 20px rgba(16, 185, 129, 0.25);
+}
+
+/* ─── Dark theme ───────────────────────────────────────────────────────────── */
+.dark {
+  /* Backgrounds */
+  --background: 11 14 20;
+  --surface: 17 21 32;
+  --surface-dim: 11 14 20;
+  --surface-bright: 40 44 54;
+  --surface-container-lowest: 0 0 0;
+  --surface-container-low: 16 19 26;
+  --surface-container: 22 26 33;
+  --surface-container-high: 28 32 40;
+  --surface-container-highest: 34 38 47;
+
+  /* Primary — cyan */
+  --primary: 77 201 240;
+  --primary-dim: 42 184 224;
+  --primary-container: 0 224 255;
+  --primary-fixed: 0 224 255;
+  --primary-fixed-dim: 0 209 238;
+
+  /* Secondary — green */
+  --secondary: 63 255 139;
+  --secondary-dim: 36 240 126;
+  --secondary-container: 0 109 53;
+  --secondary-fixed: 63 255 139;
+  --secondary-fixed-dim: 36 240 126;
+
+  /* Tertiary — purple */
+  --tertiary: 166 140 255;
+  --tertiary-dim: 126 81 255;
+  --tertiary-container: 124 77 255;
+  --tertiary-fixed: 184 163 255;
+  --tertiary-fixed-dim: 171 147 255;
+
+  /* Error */
+  --error: 255 113 108;
+  --error-dim: 215 56 59;
+  --error-container: 159 5 25;
+
+  /* Outlines */
+  --outline: 115 117 125;
+  --outline-variant: 69 72 79;
+
+  /* On-colors */
+  --on-background: 236 237 246;
+  --on-surface: 236 237 246;
+  --on-surface-variant: 169 171 179;
+  --on-primary: 10 42 51;
+  --on-secondary: 0 93 44;
+  --on-error: 73 0 6;
+
+  /* Semantic */
+  --success: 63 255 139;
+  --success-container: 0 109 53;
+  --warning: 255 193 7;
+  --warning-container: 125 90 0;
+  --info: 77 201 240;
+  --info-container: 0 85 97;
+
+  /* Shadows */
+  --shadow-ambient: 0 20px 40px rgba(0, 0, 0, 0.4), 0 0 10px rgba(77, 201, 240, 0.05);
+  --shadow-glow-primary: 0 0 20px rgba(77, 201, 240, 0.3);
+  --shadow-glow-primary-subtle: 0 0 5px rgba(77, 201, 240, 0.2);
+  --shadow-glow-secondary: 0 0 20px rgba(63, 255, 139, 0.3);
 }
 
 * {
@@ -51,8 +146,8 @@ html,
 body {
   max-width: 100vw;
   overflow-x: hidden;
-  background: var(--background);
-  color: var(--on-background);
+  background: rgb(var(--background));
+  color: rgb(var(--on-background));
   font-family: 'Inter', system-ui, sans-serif;
 }
 
@@ -64,45 +159,45 @@ code, pre, .font-mono {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-/* Custom scrollbar for dark theme */
+/* Custom scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: var(--surface-container-low);
+  background: rgb(var(--surface-container-low));
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--outline-variant);
+  background: rgb(var(--outline-variant));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--outline);
+  background: rgb(var(--outline));
 }
 
 /* Ghost border utility */
 .ghost-border {
-  border: 1px solid rgba(69, 72, 79, 0.15);
+  border: 1px solid rgb(var(--outline-variant) / 0.15);
 }
 
 /* Glass effect */
 .glass {
-  background: rgba(129, 233, 255, 0.05);
+  background: rgb(var(--primary) / 0.05);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
 
-/* Neon glow text */
+/* Glow text */
 .text-glow {
   text-shadow: 0 0 10px currentColor;
 }
 
 /* Gradient text */
 .gradient-text {
-  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-container) 100%);
+  background: linear-gradient(135deg, rgb(var(--primary)) 0%, rgb(var(--primary-container)) 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
@@ -111,14 +206,14 @@ code, pre, .font-mono {
 /* Focus styles */
 input:focus, textarea:focus, select:focus {
   outline: none;
-  background: var(--surface-bright);
-  border-bottom-color: var(--primary);
+  background: rgb(var(--surface-bright));
+  border-bottom-color: rgb(var(--primary));
 }
 
 /* Selection color */
 ::selection {
-  background: rgba(129, 233, 255, 0.3);
-  color: var(--on-background);
+  background: rgb(var(--primary) / 0.25);
+  color: rgb(var(--on-background));
 }
 
 /* Animations */

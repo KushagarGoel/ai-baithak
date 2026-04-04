@@ -12,6 +12,33 @@ import {
   KeyInsight,
 } from '@/types';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:11111';
+
+/**
+ * Authenticated fetch wrapper that includes session credentials and handles 401 errors.
+ * On a 401 response, redirects to the login page.
+ */
+export async function fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
+  const fullUrl = url.startsWith('http') ? url : `${API_BASE}${url}`;
+  const response = await fetch(fullUrl, {
+    ...options,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+  });
+
+  if (response.status === 401) {
+    if (typeof window !== 'undefined') {
+      window.location.href = '/login';
+    }
+    throw new Error('Unauthorized');
+  }
+
+  return response;
+}
+
 interface CouncilState {
   // View state
   viewMode: ViewMode;

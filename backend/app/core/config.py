@@ -1,6 +1,7 @@
 """Application configuration."""
 
 import os
+import secrets
 from pathlib import Path
 from pydantic_settings import BaseSettings
 
@@ -24,6 +25,12 @@ class Settings(BaseSettings):
 
     # CORS
     CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+    # Auth
+    SECRET_KEY: str = secrets.token_urlsafe(32)
+    SESSION_COOKIE_NAME: str = "session_id"
+    SESSION_MAX_AGE: int = 7 * 24 * 60 * 60  # 7 days
+    CSRF_COOKIE_NAME: str = "csrf_token"
 
     class Config:
         env_file = ".env"

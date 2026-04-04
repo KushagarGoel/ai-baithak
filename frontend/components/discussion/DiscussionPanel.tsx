@@ -54,6 +54,8 @@ export function DiscussionPanel() {
   const isActiveRef = useRef(true);
   const retryCountRef = useRef(0);
   const maxRetries = 3;
+  const heartbeatIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastPongRef = useRef<number>(Date.now());
 
   // Group turns by segment
   const turnsBySegment = turns.reduce((acc, turn) => {
@@ -80,7 +82,7 @@ export function DiscussionPanel() {
       setIsLoadingSession(true);
       try {
         // Try to load session data via API
-        const response = await fetch(`${API_BASE_URL}/api/sessions/${config.session_id}`);
+        const response = await fetch(`${API_BASE_URL}/api/sessions/${config.session_id}`, { credentials: 'include' });
         if (response.ok) {
           const sessionData = await response.json();
 
@@ -116,7 +118,7 @@ export function DiscussionPanel() {
           }
 
           // Load insights
-          const insightsResponse = await fetch(`${API_BASE_URL}/api/sessions/${config.session_id}/insights`);
+          const insightsResponse = await fetch(`${API_BASE_URL}/api/sessions/${config.session_id}/insights`, { credentials: 'include' });
           if (insightsResponse.ok) {
             const insightsData = await insightsResponse.json();
             if (insightsData.insights && insightsData.insights.length > 0) {
@@ -147,11 +149,38 @@ export function DiscussionPanel() {
   useEffect(() => {
     return () => {
       isActiveRef.current = false;
+      if (heartbeatIntervalRef.current) {
+        clearInterval(heartbeatIntervalRef.current);
+        heartbeatIntervalRef.current = null;
+      }
       if (wsRef.current) {
         wsRef.current.close(1000, 'Component unmounting');
         wsRef.current = null;
       }
     };
+  }, []);
+
+  // Start heartbeat to keep connection alive
+  const startHeartbeat = useCallback(() => {
+    // Send ping every 20 seconds to prevent idle timeout
+    heartbeatIntervalRef.current = setInterval(() => {
+      if (wsRef.current?.readyState === WebSocket.OPEN) {
+        // Check if we haven't received a pong in 60 seconds
+        if (Date.now() - lastPongRef.current > 60000) {
+          console.log('[WebSocket] No pong received for 60s, closing connection');
+          wsRef.current.close(1011, 'Heartbeat timeout');
+          return;
+        }
+        wsRef.current.send(JSON.stringify({ type: 'ping' }));
+      }
+    }, 20000);
+  }, []);
+
+  const stopHeartbeat = useCallback(() => {
+    if (heartbeatIntervalRef.current) {
+      clearInterval(heartbeatIntervalRef.current);
+      heartbeatIntervalRef.current = null;
+    }
   }, []);
 
   // Start discussion - connect WebSocket only when user clicks start
@@ -183,8 +212,12 @@ export function DiscussionPanel() {
         if (!isActiveRef.current) return;
         console.log('[WebSocket] Connected successfully');
         retryCountRef.current = 0;
+        lastPongRef.current = Date.now();
         setWsStatus('connected');
         setDiscussionStatus('running');
+
+        // Start heartbeat to prevent idle timeout
+        startHeartbeat();
 
         // Update orchestrator state
         updateOrchestratorState({ is_running: true, status: 'thinking' });
@@ -266,6 +299,7 @@ export function DiscussionPanel() {
 
             case 'pong':
               // Keepalive response
+              lastPongRef.current = Date.now();
               break;
           }
         } catch (e) {
@@ -280,6 +314,7 @@ export function DiscussionPanel() {
 
       ws.onclose = (event) => {
         console.log('[WebSocket] Closed:', event.code, event.reason);
+        stopHeartbeat();
         setWsStatus('disconnected');
         setWsConnection(null);
 

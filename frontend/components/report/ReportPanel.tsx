@@ -31,7 +31,7 @@ export function ReportPanel() {
     setError(null);
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/sessions/${currentSessionId}/report`);
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${currentSessionId}/report`, { credentials: 'include' });
       if (!response.ok) {
         if (response.status === 404) {
           // Try to generate a new report
@@ -58,6 +58,7 @@ export function ReportPanel() {
     try {
       const response = await fetch(`${API_BASE_URL}/api/sessions/${currentSessionId}/generate-report`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ custom_instructions: instructions }),
       });
@@ -83,7 +84,7 @@ export function ReportPanel() {
     if (!currentSessionId) return;
 
     try {
-      const response = await fetch(`${API_BASE_URL}/api/sessions/${currentSessionId}/report-pdf`);
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${currentSessionId}/report-pdf`, { credentials: 'include' });
       if (!response.ok) {
         throw new Error('Failed to download report');
       }

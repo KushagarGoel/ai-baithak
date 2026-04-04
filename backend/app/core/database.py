@@ -3,11 +3,26 @@
 import sqlite3
 import json
 import os
+import uuid
 from datetime import datetime
 from typing import Optional
 from contextlib import contextmanager
 
 from app.models.schemas import CouncilConfig, DiscussionTurn, DiscussionSegment
+
+# Auth: Users table
+USERS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT DEFAULT 'user' CHECK(role IN ('user', 'admin')),
+    is_active BOOLEAN DEFAULT 1,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
 
 # MCP Framework: New database tables for agents and MCP servers
 AGENTS_TABLE_SQL = """
@@ -181,6 +196,39 @@ class SessionDatabase:
                 CREATE INDEX IF NOT EXISTS idx_sessions_updated_at ON sessions(updated_at DESC)
             """)
 
+            # Auth: Create users table
+            conn.execute(USERS_TABLE_SQL)
+
+            # Migration: Add user_id column to sessions table (for ownership)
+            try:
+                conn.execute("SELECT user_id FROM sessions LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute("ALTER TABLE sessions ADD COLUMN user_id TEXT REFERENCES users(id)")
+                print("[DB MIGRATION] Added 'user_id' column to sessions table")
+
+            # Migration: Create default admin user if no users exist
+            user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            if user_count == 0:
+                import hashlib
+                # Use a simple hash for bootstrap; passlib bcrypt added in auth.py
+                # We store a sentinel that auth.py will recognise and re-hash on first login,
+                # but for simplicity we pre-hash with the same bcrypt used at runtime.
+                try:
+                    from passlib.context import CryptContext
+                    _pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+                    admin_hash = _pwd_ctx.hash("admin")
+                except Exception:
+                    # Fallback: sha256 hex (auth layer should always use passlib)
+                    admin_hash = hashlib.sha256(b"admin").hexdigest()
+
+                admin_id = f"user_{uuid.uuid4().hex[:12]}"
+                conn.execute("""
+                    INSERT INTO users (id, email, username, password_hash, role)
+                    VALUES (?, 'admin@localhost', 'admin', ?, 'admin')
+                """, (admin_id, admin_hash))
+                print(f"[DB MIGRATION] Created default admin user: username='admin', password='admin'")
+                print("[WARNING] Please change the default admin password immediately!")
+
             # MCP Framework: Create new tables for agent configuration
             conn.execute(AGENTS_TABLE_SQL)
             conn.execute(MCP_SERVERS_TABLE_SQL)
@@ -325,7 +373,7 @@ class SessionDatabase:
                           current_turn: int, current_segment: int, total_tokens: int,
                           status: str = 'active', summary: Optional[dict] = None,
                           start_time: Optional[float] = None, end_time: Optional[float] = None,
-                          last_saved_turn: int = 0):
+                          last_saved_turn: int = 0, user_id: Optional[str] = None):
         """Save complete session state including turns and segments in a single transaction.
 
         This is the primary method for persisting session context to SQLite.
@@ -339,8 +387,8 @@ class SessionDatabase:
             # Save session metadata
             conn.execute("""
                 INSERT INTO sessions (session_id, topic, config, current_turn, current_segment,
-                                     total_tokens, start_time, end_time, status, summary)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                     total_tokens, start_time, end_time, status, summary, user_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(session_id) DO UPDATE SET
                     topic = excluded.topic,
                     config = excluded.config,
@@ -351,10 +399,11 @@ class SessionDatabase:
                     end_time = excluded.end_time,
                     status = excluded.status,
                     summary = excluded.summary,
+                    user_id = COALESCE(excluded.user_id, sessions.user_id),
                     updated_at = CURRENT_TIMESTAMP
             """, (session_id, topic, config.model_dump_json(), current_turn,
                   current_segment, total_tokens, start_time_str, end_time_str,
-                  status, summary_json))
+                  status, summary_json, user_id))
 
             # Only save new turns (after last_saved_turn)
             # This avoids O(n^2) behavior of saving all turns every time
@@ -414,7 +463,7 @@ class SessionDatabase:
         with self._get_conn() as conn:
             rows = conn.execute(
                 """SELECT session_id, topic, current_turn, current_segment,
-                          total_tokens, status, start_time, end_time, updated_at
+                          total_tokens, status, start_time, end_time, updated_at, user_id
                    FROM sessions ORDER BY updated_at DESC"""
             ).fetchall()
             return [dict(r) for r in rows]
@@ -807,6 +856,71 @@ class SessionDatabase:
                 (summary_json, session_id)
             )
             return conn.total_changes > 0
+
+    # Auth: User CRUD methods
+    def create_user(self, user_id: str, email: str, username: str,
+                    password_hash: str, role: str = 'user') -> dict:
+        """Create a new user."""
+        with self._get_conn() as conn:
+            conn.execute("""
+                INSERT INTO users (id, email, username, password_hash, role)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, email, username, password_hash, role))
+            return self.get_user_by_id(user_id)
+
+    def get_user_by_email(self, email: str) -> Optional[dict]:
+        """Get a user by email address."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE email = ?",
+                (email,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_user_by_username(self, username: str) -> Optional[dict]:
+        """Get a user by username."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE username = ?",
+                (username,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def get_user_by_id(self, user_id: str) -> Optional[dict]:
+        """Get a user by ID."""
+        with self._get_conn() as conn:
+            row = conn.execute(
+                "SELECT * FROM users WHERE id = ?",
+                (user_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_users(self) -> list[dict]:
+        """List all users ordered by creation date."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                "SELECT * FROM users ORDER BY created_at DESC"
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def update_user(self, user_id: str, **fields) -> Optional[dict]:
+        """Update a user's fields."""
+        allowed_fields = {'email', 'username', 'password_hash', 'role', 'is_active'}
+        updates = {k: v for k, v in fields.items() if k in allowed_fields}
+
+        if not updates:
+            return self.get_user_by_id(user_id)
+
+        updates['updated_at'] = datetime.now().isoformat()
+
+        set_clause = ', '.join(f"{k} = ?" for k in updates.keys())
+        values = list(updates.values()) + [user_id]
+
+        with self._get_conn() as conn:
+            conn.execute(f"""
+                UPDATE users SET {set_clause} WHERE id = ?
+            """, values)
+            return self.get_user_by_id(user_id)
 
 
 # Global database instance

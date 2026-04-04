@@ -30,9 +30,17 @@ export function useAdminApi() {
     setError(null);
     try {
       const response = await fetch(`${API_BASE}${url}`, {
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         ...options,
       });
+
+      if (response.status === 401) {
+        if (typeof window !== 'undefined') {
+          window.location.href = '/login';
+        }
+        throw new Error('Unauthorized');
+      }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));

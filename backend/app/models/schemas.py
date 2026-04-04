@@ -1,8 +1,50 @@
 """Pydantic models for the Agent Council API."""
 
 from datetime import datetime
+from enum import Enum
 from typing import Any, Optional, Literal
 from pydantic import BaseModel, Field
+
+
+# Auth Models
+class UserRole(str, Enum):
+    USER = "user"
+    ADMIN = "admin"
+
+
+class UserBase(BaseModel):
+    """Base user model."""
+    email: str
+    username: str
+    role: UserRole = UserRole.USER
+
+
+class UserCreate(BaseModel):
+    """Request to create a user."""
+    email: str
+    username: str
+    password: str
+
+
+class UserLogin(BaseModel):
+    """Request to login a user."""
+    username: str
+    password: str
+
+
+class User(UserBase):
+    """A user stored in the database."""
+    id: str
+    is_active: bool
+    created_at: Optional[str] = None
+
+
+class UserResponse(BaseModel):
+    """Public user response (no sensitive fields)."""
+    id: str
+    email: str
+    username: str
+    role: UserRole
 
 
 # MCP Framework: Agent Configuration Models

@@ -4,7 +4,7 @@ import os
 import json
 from datetime import datetime
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks, Depends
 from fastapi.responses import FileResponse, StreamingResponse
 
 from app.models.schemas import (
@@ -15,19 +15,28 @@ from app.models.schemas import (
     KeyInsight,
     DiscussionTurn,
     DiscussionSegment,
+    User,
+    UserRole,
 )
 from app.core.database import db
 from app.core.config import settings
 from app.core.report_service import ReportService
+from app.api.deps import get_current_user
 
 router = APIRouter()
 
 
 @router.get("/sessions")
-async def list_sessions():
+async def list_sessions(current_user: User = Depends(get_current_user)):
     """List all saved sessions from SQLite."""
     try:
         sessions_data = db.list_sessions_full()
+        # Filter by user unless admin
+        if current_user.role != UserRole.ADMIN:
+            sessions_data = [
+                data for data in sessions_data
+                if data.get('user_id') == current_user.id
+            ]
         sessions = []
         for data in sessions_data:
             sessions.append(Session(
@@ -44,12 +53,18 @@ async def list_sessions():
 
 
 @router.get("/sessions/{session_id}")
-async def get_session(session_id: str):
+async def get_session(session_id: str, current_user: User = Depends(get_current_user)):
     """Get a specific session with all turns, segments, and insights from SQLite."""
     try:
         session_data = db.load_session_full(session_id)
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        # Ownership check
+        session_user_id = session_data.get('user_id')
+        if current_user.role != UserRole.ADMIN:
+            if session_user_id is not None and session_user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied")
 
         # Parse config from JSON string
         if isinstance(session_data.get('config'), str):
@@ -63,9 +78,20 @@ async def get_session(session_id: str):
 
 
 @router.delete("/sessions/{session_id}")
-async def delete_session(session_id: str):
+async def delete_session(session_id: str, current_user: User = Depends(get_current_user)):
     """Delete a session and all its data from SQLite."""
     try:
+        # Load session first to check ownership
+        session_data = db.load_session_full(session_id)
+        if not session_data:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        # Ownership check
+        session_user_id = session_data.get('user_id')
+        if current_user.role != UserRole.ADMIN:
+            if session_user_id is not None and session_user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied")
+
         deleted = db.delete_session_full(session_id)
         if not deleted:
             raise HTTPException(status_code=404, detail="Session not found")
@@ -77,11 +103,17 @@ async def delete_session(session_id: str):
 
 
 @router.get("/archives")
-async def list_archives():
+async def list_archives(current_user: User = Depends(get_current_user)):
     """List all archived (completed) discussions from SQLite."""
     try:
         # Get completed sessions from database
         sessions_data = db.list_sessions_full()
+        # Filter by user unless admin
+        if current_user.role != UserRole.ADMIN:
+            sessions_data = [
+                data for data in sessions_data
+                if data.get('user_id') == current_user.id
+            ]
         archives = []
 
         for data in sessions_data:
@@ -120,7 +152,7 @@ async def list_archives():
 
 
 @router.get("/transcripts/{path:path}")
-async def download_transcript(path: str):
+async def download_transcript(path: str, current_user: User = Depends(get_current_user)):
     """Download a transcript file."""
     filepath = settings.WORKSPACE_PATH / path
 
@@ -130,6 +162,17 @@ async def download_transcript(path: str):
     except ValueError:
         raise HTTPException(status_code=403, detail="Access denied")
 
+    # Ownership check: extract session_id from path (e.g., "chats/{session_id}/...")
+    path_parts = path.split("/")
+    if len(path_parts) >= 2 and path_parts[0] == "chats":
+        session_id_from_path = path_parts[1]
+        session_data = db.load_session_full(session_id_from_path)
+        if session_data:
+            session_user_id = session_data.get('user_id')
+            if current_user.role != UserRole.ADMIN:
+                if session_user_id is not None and session_user_id != current_user.id:
+                    raise HTTPException(status_code=403, detail="Access denied")
+
     if not filepath.exists():
         raise HTTPException(status_code=404, detail="Transcript not found")
 
@@ -137,7 +180,7 @@ async def download_transcript(path: str):
 
 
 @router.post("/sessions/{session_id}/save")
-async def save_session(session_id: str, session_data: dict):
+async def save_session(session_id: str, session_data: dict, current_user: User = Depends(get_current_user)):
     """Save a session to SQLite.
 
     Expected session_data format:
@@ -184,6 +227,7 @@ async def save_session(session_id: str, session_data: dict):
             summary=session_data.get('summary'),
             start_time=session_data.get('start_time'),
             end_time=session_data.get('end_time'),
+            user_id=current_user.id,
         )
 
         return {"message": "Session saved to database"}
@@ -192,7 +236,7 @@ async def save_session(session_id: str, session_data: dict):
 
 
 @router.get("/sessions/{session_id}/insights")
-async def get_session_insights(session_id: str, segment: Optional[int] = Query(None)):
+async def get_session_insights(session_id: str, segment: Optional[int] = Query(None), current_user: User = Depends(get_current_user)):
     """Get key insights for a session."""
     print(f"[API] Getting insights for session: {session_id}, segment: {segment}")
     try:
@@ -207,6 +251,14 @@ async def get_session_insights(session_id: str, segment: Optional[int] = Query(N
                 "total_count": 0,
                 "session_id": session_id,
             }
+
+        # Ownership check
+        session_data = db.load_session_full(session_id)
+        if session_data:
+            session_user_id = session_data.get('user_id')
+            if current_user.role != UserRole.ADMIN:
+                if session_user_id is not None and session_user_id != current_user.id:
+                    raise HTTPException(status_code=403, detail="Access denied")
 
         insights_data = db.get_insights(session_id, segment)
         insights = [
@@ -227,6 +279,8 @@ async def get_session_insights(session_id: str, segment: Optional[int] = Query(N
             "total_count": len(insights),
             "session_id": session_id,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[API ERROR] Failed to get insights for {session_id}: {e}")
         # Return empty insights on error instead of 500
@@ -239,12 +293,18 @@ async def get_session_insights(session_id: str, segment: Optional[int] = Query(N
 
 
 @router.get("/sessions/{session_id}/report")
-async def get_session_report(session_id: str):
+async def get_session_report(session_id: str, current_user: User = Depends(get_current_user)):
     """Get the comprehensive solutioning report for a completed session."""
     try:
         session_data = db.load_session_full(session_id)
         if not session_data:
             raise HTTPException(status_code=404, detail="Session not found")
+
+        # Ownership check
+        session_user_id = session_data.get('user_id')
+        if current_user.role != UserRole.ADMIN:
+            if session_user_id is not None and session_user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied")
 
         # Parse summary JSON if exists
         summary_data = {}
@@ -314,7 +374,8 @@ async def get_session_report(session_id: str):
 @router.post("/sessions/{session_id}/generate-report")
 async def generate_session_report(
     session_id: str,
-    request_data: dict = None
+    request_data: dict = None,
+    current_user: User = Depends(get_current_user),
 ):
     """Generate a report on-demand for any session (active or completed).
 
@@ -332,6 +393,12 @@ async def generate_session_report(
 
         # Load session to get config with litellm_proxy
         session_data = db.load_session_full(session_id)
+
+        # Ownership check
+        session_user_id = session_data.get('user_id') if session_data else None
+        if current_user.role != UserRole.ADMIN:
+            if session_user_id is not None and session_user_id != current_user.id:
+                raise HTTPException(status_code=403, detail="Access denied")
         config_data = session_data.get('config', {})
         if isinstance(config_data, str):
             config_data = json.loads(config_data)
@@ -372,7 +439,7 @@ async def generate_session_report(
 
 
 @router.get("/sessions/{session_id}/report-pdf")
-async def download_report_pdf(session_id: str):
+async def download_report_pdf(session_id: str, current_user: User = Depends(get_current_user)):
     """Download the session report as a PDF.
 
     Args:
@@ -382,6 +449,14 @@ async def download_report_pdf(session_id: str):
         PDF file download
     """
     try:
+        # Ownership check: load session before serving file
+        session_data = db.load_session_full(session_id)
+        if session_data:
+            session_user_id = session_data.get('user_id')
+            if current_user.role != UserRole.ADMIN:
+                if session_user_id is not None and session_user_id != current_user.id:
+                    raise HTTPException(status_code=403, detail="Access denied")
+
         # Get existing report from database (fresh data)
         report_service = ReportService()
         report = report_service.get_existing_report(session_id)

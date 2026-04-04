@@ -1,8 +1,9 @@
 """Admin API routes for MCP Framework."""
 
 from typing import Any, Optional
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 
+from app.api.deps import get_current_admin
 from app.core.agent_config import agent_config_manager
 from app.core.database import db
 from app.mcp.registry import mcp_registry
@@ -24,7 +25,7 @@ router = APIRouter(prefix="/admin", tags=["admin"])
 # ============================================================================
 
 @router.post("/agents", response_model=Agent)
-async def create_agent(data: AgentCreate):
+async def create_agent(data: AgentCreate, current_user=Depends(get_current_admin)):
     """Create a new agent."""
     try:
         return agent_config_manager.create_agent(data)
@@ -33,7 +34,7 @@ async def create_agent(data: AgentCreate):
 
 
 @router.get("/agents", response_model=list[Agent])
-async def list_agents(active_only: bool = Query(True)):
+async def list_agents(active_only: bool = Query(True), current_user=Depends(get_current_admin)):
     """List all agents."""
     try:
         return agent_config_manager.list_agents(active_only=active_only)
@@ -42,7 +43,7 @@ async def list_agents(active_only: bool = Query(True)):
 
 
 @router.get("/agents/{agent_id}", response_model=Agent)
-async def get_agent(agent_id: str):
+async def get_agent(agent_id: str, current_user=Depends(get_current_admin)):
     """Get a specific agent."""
     agent = agent_config_manager.get_agent(agent_id)
     if not agent:
@@ -51,7 +52,7 @@ async def get_agent(agent_id: str):
 
 
 @router.put("/agents/{agent_id}", response_model=Agent)
-async def update_agent(agent_id: str, data: AgentUpdate):
+async def update_agent(agent_id: str, data: AgentUpdate, current_user=Depends(get_current_admin)):
     """Update an agent."""
     agent = agent_config_manager.update_agent(agent_id, data)
     if not agent:
@@ -60,7 +61,7 @@ async def update_agent(agent_id: str, data: AgentUpdate):
 
 
 @router.delete("/agents/{agent_id}")
-async def delete_agent(agent_id: str):
+async def delete_agent(agent_id: str, current_user=Depends(get_current_admin)):
     """Delete an agent."""
     success = agent_config_manager.delete_agent(agent_id)
     if not success:
@@ -73,7 +74,7 @@ async def delete_agent(agent_id: str):
 # ============================================================================
 
 @router.post("/mcps", response_model=MCPServer)
-async def create_mcp(data: MCPServerCreate):
+async def create_mcp(data: MCPServerCreate, current_user=Depends(get_current_admin)):
     """Register a new MCP server."""
     try:
         import uuid
@@ -92,7 +93,7 @@ async def create_mcp(data: MCPServerCreate):
 
 
 @router.get("/mcps", response_model=list[MCPServerWithStatus])
-async def list_mcps(active_only: bool = Query(True)):
+async def list_mcps(active_only: bool = Query(True), current_user=Depends(get_current_admin)):
     """List all MCP servers with their status."""
     try:
         mcps = mcp_registry.list_mcps(active_only=active_only)
@@ -116,7 +117,7 @@ async def list_mcps(active_only: bool = Query(True)):
 
 
 @router.get("/mcps/{mcp_id}", response_model=MCPServerWithStatus)
-async def get_mcp(mcp_id: str):
+async def get_mcp(mcp_id: str, current_user=Depends(get_current_admin)):
     """Get a specific MCP server."""
     mcp = mcp_registry.get_mcp(mcp_id)
     if not mcp:
@@ -138,7 +139,7 @@ async def get_mcp(mcp_id: str):
 
 
 @router.put("/mcps/{mcp_id}", response_model=MCPServer)
-async def update_mcp(mcp_id: str, data: MCPServerUpdate):
+async def update_mcp(mcp_id: str, data: MCPServerUpdate, current_user=Depends(get_current_admin)):
     """Update an MCP server."""
     updates = {k: v for k, v in data.model_dump().items() if v is not None}
     if not updates:
@@ -152,7 +153,7 @@ async def update_mcp(mcp_id: str, data: MCPServerUpdate):
 
 
 @router.delete("/mcps/{mcp_id}")
-async def delete_mcp(mcp_id: str):
+async def delete_mcp(mcp_id: str, current_user=Depends(get_current_admin)):
     """Unregister an MCP server."""
     success = await mcp_registry.unregister_mcp(mcp_id)
     if not success:
@@ -161,7 +162,7 @@ async def delete_mcp(mcp_id: str):
 
 
 @router.post("/mcps/{mcp_id}/test")
-async def test_mcp_connection(mcp_id: str):
+async def test_mcp_connection(mcp_id: str, current_user=Depends(get_current_admin)):
     """Test connection to an MCP server."""
     success, error = await mcp_registry.test_connection(mcp_id)
     if success:
@@ -171,7 +172,7 @@ async def test_mcp_connection(mcp_id: str):
 
 
 @router.get("/mcps/{mcp_id}/tools", response_model=list[MCPTool])
-async def get_mcp_tools(mcp_id: str):
+async def get_mcp_tools(mcp_id: str, current_user=Depends(get_current_admin)):
     """Get tools available from an MCP server."""
     tools = mcp_registry.get_mcp_tools(mcp_id)
     return [
@@ -191,13 +192,13 @@ async def get_mcp_tools(mcp_id: str):
 # ============================================================================
 
 @router.get("/mcp-templates")
-async def list_mcp_templates():
+async def list_mcp_templates(current_user=Depends(get_current_admin)):
     """List available MCP templates."""
     return {"templates": list_templates()}
 
 
 @router.post("/mcp-templates/{template_name}")
-async def create_from_mcp_template(template_name: str, name: str, variables: dict[str, Any]):
+async def create_from_mcp_template(template_name: str, name: str, variables: dict[str, Any], current_user=Depends(get_current_admin)):
     """Create an MCP server from a template."""
     try:
         config = create_from_template(template_name, name, **variables)
@@ -213,7 +214,7 @@ async def create_from_mcp_template(template_name: str, name: str, variables: dic
 # ============================================================================
 
 @router.post("/agents/{agent_id}/mcps")
-async def grant_mcp_access(agent_id: str, data: MCPAccessGrant):
+async def grant_mcp_access(agent_id: str, data: MCPAccessGrant, current_user=Depends(get_current_admin)):
     """Grant an agent access to an MCP server."""
     success = agent_config_manager.grant_mcp_access(
         agent_id, data.mcp_id, data.allowed_tools
@@ -224,14 +225,14 @@ async def grant_mcp_access(agent_id: str, data: MCPAccessGrant):
 
 
 @router.get("/agents/{agent_id}/mcps", response_model=list[MCPServer])
-async def get_agent_mcps(agent_id: str):
+async def get_agent_mcps(agent_id: str, current_user=Depends(get_current_admin)):
     """Get all MCP servers an agent has access to."""
     mcps = agent_config_manager.get_agent_mcps(agent_id)
     return mcps
 
 
 @router.delete("/agents/{agent_id}/mcps/{mcp_id}")
-async def revoke_mcp_access(agent_id: str, mcp_id: str):
+async def revoke_mcp_access(agent_id: str, mcp_id: str, current_user=Depends(get_current_admin)):
     """Revoke an agent's access to an MCP server."""
     success = agent_config_manager.revoke_mcp_access(agent_id, mcp_id)
     if not success:
@@ -240,7 +241,7 @@ async def revoke_mcp_access(agent_id: str, mcp_id: str):
 
 
 @router.put("/agents/{agent_id}/mcps/{mcp_id}")
-async def update_mcp_permissions(agent_id: str, mcp_id: str, data: MCPAccessUpdate):
+async def update_mcp_permissions(agent_id: str, mcp_id: str, data: MCPAccessUpdate, current_user=Depends(get_current_admin)):
     """Update the allowed tools for an agent-MCP pair."""
     success = agent_config_manager.update_mcp_permissions(
         agent_id, mcp_id, data.allowed_tools
@@ -251,7 +252,7 @@ async def update_mcp_permissions(agent_id: str, mcp_id: str, data: MCPAccessUpda
 
 
 @router.get("/permissions/matrix", response_model=PermissionMatrix)
-async def get_permission_matrix():
+async def get_permission_matrix(current_user=Depends(get_current_admin)):
     """Get the full permission matrix."""
     matrix = agent_config_manager.get_permission_matrix()
 
@@ -279,21 +280,21 @@ async def get_permission_matrix():
 # ============================================================================
 
 @router.post("/groups", response_model=AgentGroup)
-async def create_agent_group(data: AgentGroupCreate):
+async def create_agent_group(data: AgentGroupCreate, current_user=Depends(get_current_admin)):
     """Create a new agent group."""
     result = agent_config_manager.create_agent_group(data.name, data.description)
     return AgentGroup(**result)
 
 
 @router.get("/groups", response_model=list[AgentGroup])
-async def list_agent_groups():
+async def list_agent_groups(current_user=Depends(get_current_admin)):
     """List all agent groups."""
     groups = agent_config_manager.list_agent_groups()
     return [AgentGroup(**g) for g in groups]
 
 
 @router.get("/groups/{group_id}", response_model=AgentGroupWithMembers)
-async def get_agent_group(group_id: str):
+async def get_agent_group(group_id: str, current_user=Depends(get_current_admin)):
     """Get an agent group with its members."""
     group = agent_config_manager.get_agent_group(group_id)
     if not group:
@@ -310,7 +311,7 @@ async def get_agent_group(group_id: str):
 
 
 @router.delete("/groups/{group_id}")
-async def delete_agent_group(group_id: str):
+async def delete_agent_group(group_id: str, current_user=Depends(get_current_admin)):
     """Delete an agent group."""
     success = agent_config_manager.delete_agent_group(group_id)
     if not success:
@@ -319,7 +320,7 @@ async def delete_agent_group(group_id: str):
 
 
 @router.post("/groups/{group_id}/agents/{agent_id}")
-async def add_agent_to_group(group_id: str, agent_id: str):
+async def add_agent_to_group(group_id: str, agent_id: str, current_user=Depends(get_current_admin)):
     """Add an agent to a group."""
     success = agent_config_manager.add_agent_to_group(group_id, agent_id)
     if not success:
@@ -328,7 +329,7 @@ async def add_agent_to_group(group_id: str, agent_id: str):
 
 
 @router.delete("/groups/{group_id}/agents/{agent_id}")
-async def remove_agent_from_group(group_id: str, agent_id: str):
+async def remove_agent_from_group(group_id: str, agent_id: str, current_user=Depends(get_current_admin)):
     """Remove an agent from a group."""
     success = agent_config_manager.remove_agent_from_group(group_id, agent_id)
     if not success:

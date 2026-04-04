@@ -18,7 +18,11 @@ export function SessionsPanel() {
 
   const fetchSessions = async () => {
     try {
-      const response = await fetch('/api/sessions');
+      const response = await fetch('/api/sessions', { credentials: 'include' });
+      if (response.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
       const data = await response.json();
       setSessions(data.sessions || []);
     } catch (error) {
@@ -30,7 +34,11 @@ export function SessionsPanel() {
 
   const loadSession = async (sessionId: string) => {
     try {
-      const response = await fetch(`/api/sessions/${sessionId}`);
+      const response = await fetch(`/api/sessions/${sessionId}`, { credentials: 'include' });
+      if (response.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
       const data = await response.json();
 
       if (data.config) {
@@ -54,7 +62,14 @@ export function SessionsPanel() {
     if (!confirm('Are you sure you want to delete this session?')) return;
 
     try {
-      await fetch(`/api/sessions/${sessionId}`, { method: 'DELETE' });
+      const response = await fetch(`/api/sessions/${sessionId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (response.status === 401) {
+        window.location.href = '/login';
+        return;
+      }
       setSessions(sessions.filter(s => s.id !== sessionId));
     } catch (error) {
       console.error('Failed to delete session:', error);
@@ -64,7 +79,7 @@ export function SessionsPanel() {
   const viewReport = async (sessionId: string) => {
     try {
       // First try to get existing report
-      const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/report`);
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/report`, { credentials: 'include' });
       if (response.ok) {
         const report = await response.json();
         setComprehensiveReport(report);
@@ -93,6 +108,7 @@ export function SessionsPanel() {
       setLoading(true);
       const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/generate-report`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ custom_instructions: customInstructions }),
       });
@@ -117,7 +133,7 @@ export function SessionsPanel() {
 
   const downloadReportMD = async (sessionId: string, topic: string) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/report-pdf`);
+      const response = await fetch(`${API_BASE_URL}/api/sessions/${sessionId}/report-pdf`, { credentials: 'include' });
       if (!response.ok) {
         if (response.status === 404) {
           if (confirm('No report exists. Generate one first?')) {
